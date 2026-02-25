@@ -47,6 +47,23 @@ def find_tagging_note(vault_path: Path) -> Path | None:
     return None
 
 
+def detect_tag_format_from_text(text: str) -> str | None:
+    """Detect tag format from a single note's text. Returns 'list', 'inline', or None if no tags found."""
+    if not text.startswith("---"):
+        return None
+    end = text.find("---", 3)
+    if end == -1:
+        return None
+    fm_text = text[3:end]
+    if "tags:" not in fm_text:
+        return None
+    for line in fm_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("tags:"):
+            return "inline" if "[" in stripped else "list"
+    return None
+
+
 def sample_tag_format(vault_path: Path, sample_count: int = 10) -> str:
     """Sample up to sample_count notes to detect tag format: 'list' or 'inline'."""
     list_count = 0
@@ -56,23 +73,13 @@ def sample_tag_format(vault_path: Path, sample_count: int = 10) -> str:
         if checked >= sample_count:
             break
         text = md.read_text(encoding="utf-8", errors="ignore")
-        if not text.startswith("---"):
-            continue
-        end = text.find("---", 3)
-        if end == -1:
-            continue
-        fm_text = text[3:end]
-        if "tags:" in fm_text:
-            lines = fm_text.splitlines()
-            for line in lines:
-                stripped = line.strip()
-                if stripped.startswith("tags:"):
-                    if "[" in stripped:
-                        inline_count += 1
-                    else:
-                        list_count += 1
-                    checked += 1
-                    break
+        fmt = detect_tag_format_from_text(text)
+        if fmt == "inline":
+            inline_count += 1
+            checked += 1
+        elif fmt == "list":
+            list_count += 1
+            checked += 1
     return "inline" if inline_count > list_count else "list"
 
 
@@ -204,7 +211,7 @@ def main():
     if tagging_note:
         console.print(f"\n[green]Found tagging note:[/green] {tagging_note}")
         tag_content = tagging_note.read_text(encoding="utf-8", errors="ignore")
-        tag_format = "list" if "  -" in tag_content or "\n- " in tag_content else "inline"
+        tag_format = detect_tag_format_from_text(tag_content) or sample_tag_format(vault_path)
         console.print(f"  Detected tag format: {tag_format}")
     else:
         console.print("\n[yellow]No tagging note found. Sampling vault to detect format...[/yellow]")
