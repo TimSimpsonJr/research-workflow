@@ -111,9 +111,3 @@ pytest tests/ -v
 ```
 
 95 tests across all scripts. All tests run offline (no API calls required).
-
-## Design Docs
-
-- `docs/plans/2026-02-25-research-workflow-automation.md` — Original toolkit implementation plan
-- `docs/plans/2026-02-25-research-pipeline-3tier-design.md` — 3-tier pipeline design
-- `docs/plans/2026-02-25-3tier-pipeline-implementation.md` — 3-tier pipeline implementation plan
