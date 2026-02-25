@@ -30,9 +30,27 @@ MAX_CHARS = 150_000
 TOKEN_CONFIRM_THRESHOLD = 100_000
 
 
+REPOMIX_FALLBACK_PATHS = [
+    r"C:\Users\tim\AppData\Roaming\npm\node_modules\repomix\bin\repomix.cjs",
+]
+NODE_FALLBACK_PATH = r"C:\Program Files\nodejs\node.exe"
+
+
+def find_repomix() -> tuple[str, ...] | None:
+    """Return command tuple to invoke repomix, or None if not found."""
+    if shutil.which("repomix"):
+        return ("repomix",)
+    for path in REPOMIX_FALLBACK_PATHS:
+        if Path(path).exists() and shutil.which("node"):
+            return ("node", path)
+        if Path(path).exists() and Path(NODE_FALLBACK_PATH).exists():
+            return (NODE_FALLBACK_PATH, path)
+    return None
+
+
 def check_repomix() -> bool:
-    """Return True if repomix is available on PATH."""
-    return shutil.which("repomix") is not None
+    """Return True if repomix is available."""
+    return find_repomix() is not None
 
 
 def collect_markdown_files(folder: Path, recursive: bool = False) -> list[Path]:
@@ -58,8 +76,11 @@ def estimate_tokens(text: str) -> int:
 
 def run_repomix(folder: Path, config_path: Path, output_path: Path) -> str:
     """Run repomix and return its output as a string."""
+    cmd = find_repomix()
+    if cmd is None:
+        raise FileNotFoundError("repomix not found")
     subprocess.run(
-        ["repomix", "--config", str(config_path), "--output-file", str(output_path), str(folder)],
+        [*cmd, "--config", str(config_path), "--output-file", str(output_path), str(folder)],
         check=True,
         capture_output=True,
     )
