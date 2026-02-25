@@ -2,6 +2,16 @@
 
 A modular Python toolkit and Claude Code skills for automating an Obsidian research workflow — from topic research and URL ingestion through transcript processing, note synthesis, and formatted output, all via the Claude API.
 
+## Why This Exists
+
+Research in Obsidian means a lot of manual work: finding sources, reading articles, deciding where notes go, maintaining consistent formatting, keeping wikilinks and MOCs up to date. This toolkit automates the tedious parts so you can focus on thinking.
+
+**The `/research` command** lets you type a topic and walk away. It searches the web, fetches and caches the best sources, figures out where new notes belong in your vault's folder structure, and writes them with proper frontmatter, tags, wikilinks, and source citations — all matching your existing conventions.
+
+**The standalone scripts** handle the rest of the workflow: ingesting URLs into an inbox, linting frontmatter across the vault, finding broken wikilinks, surfacing related notes, synthesizing folders into MOCs, processing interview transcripts, and transforming research into output formats like articles, briefings, or newsletters.
+
+Everything runs locally through the Claude API. Your vault stays on your machine, and fetched web content is cached so you're not re-downloading pages you've already read.
+
 ## Prerequisites
 
 - Python 3.10+
@@ -38,7 +48,7 @@ The main feature is a 3-tier research pipeline invoked via Claude Code's `/resea
 **How it works:**
 
 1. **Tier 1 — Search (Haiku):** A Haiku agent searches the web and selects the 3-7 most relevant URLs for the topic.
-2. **Tier 2 — Fetch (Python):** `fetch_and_clean.py` fetches each URL via [Jina Reader](https://jina.ai/reader/), converts to markdown, and caches results locally (MD5 key, 7-day TTL). Falls back to the Wayback Machine if the primary fetch fails.
+2. **Tier 2 — Fetch (Python):** `fetch_and_clean.py` fetches each URL via [Jina Reader](https://jina.ai/reader/), converts to markdown, and caches results locally (7-day TTL). Falls back to the Wayback Machine if the primary fetch fails.
 3. **Tier 3 — Classify (Haiku):** A Haiku agent scans the vault file structure, classifies each article, and determines where new notes should go (create vs. update, folder placement, tags, wikilinks).
 4. **Write (Sonnet):** The Sonnet orchestrator synthesizes the fetched content and classification into final vault notes, matching existing format conventions.
 
