@@ -43,8 +43,10 @@ def load_format_prompt(fmt: str, formats_dir: Path) -> str:
 
 
 def build_output_path(output_dir: Path, date_str: str, source_slug: str, fmt: str) -> Path:
-    """Build the output file path."""
-    return output_dir / f"{date_str}-{source_slug}-{fmt}.md"
+    """Build the output file path. Date prefix only for daily_digest format."""
+    if fmt == "daily_digest":
+        return output_dir / f"{date_str}-{source_slug}-{fmt}.md"
+    return output_dir / f"{source_slug}-{fmt}.md"
 
 
 def startup_checks():
