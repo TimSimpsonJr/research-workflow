@@ -26,10 +26,12 @@ console = Console()
 # Approximate cost per million tokens (USD)
 COST_PER_M_INPUT = {
     "claude-opus-4-6": 15.0,
+    "claude-sonnet-4-6": 3.0,
     "claude-haiku-4-5-20251001": 0.25,
 }
 COST_PER_M_OUTPUT = {
     "claude-opus-4-6": 75.0,
+    "claude-sonnet-4-6": 15.0,
     "claude-haiku-4-5-20251001": 1.25,
 }
 
