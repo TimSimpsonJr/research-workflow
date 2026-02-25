@@ -86,7 +86,12 @@ def unique_output_path(inbox_path: Path, date: str, slug: str) -> Path:
 
 
 def fetch_url(url: str) -> str:
-    """Fetch URL via Jina Reader and return markdown content."""
+    """Fetch URL via Jina Reader and return markdown content.
+
+    Raises ValueError if the URL targets a private/internal address.
+    """
+    from fetch_and_clean import validate_url
+    validate_url(url)
     jina_url = f"{config.JINA_BASE_URL}/{url}"
     response = requests.get(jina_url, timeout=30)
     response.raise_for_status()

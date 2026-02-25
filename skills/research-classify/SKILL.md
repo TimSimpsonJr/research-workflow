@@ -40,7 +40,7 @@ You will receive a `fetch_results` JSON object (inline in this prompt) with this
 - `fetched` — list of `{ url, title, content, ... }` objects
 - `failed` — URLs that could not be fetched
 
-Vault root: `C:\Users\tim\OneDrive\Documents\Tim's Vault`
+Vault root: `{{VAULT_ROOT}}`
 
 ---
 
@@ -48,7 +48,7 @@ Vault root: `C:\Users\tim\OneDrive\Documents\Tim's Vault`
 
 Use the Glob tool:
 - Pattern: `**/*.md`
-- Path: `C:\Users\tim\OneDrive\Documents\Tim's Vault`
+- Path: `{{VAULT_ROOT}}`
 
 Store the full list of relative file paths. Strip the vault root prefix to get relative paths.
 

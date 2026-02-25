@@ -27,9 +27,9 @@ You orchestrate research into the vault using a 3-tier pipeline:
 3. **Haiku classify** — maps content to vault structure
 4. **Sonnet write** — you synthesize and write the final notes
 
-Vault root: `C:\Users\tim\OneDrive\Documents\Tim's Vault`
-Scripts dir: `C:\Users\tim\OneDrive\Documents\Projects\research-workflow`
-Python: `C:\Users\tim\AppData\Local\Programs\Python\Python312\python.exe`
+Vault root: `{{VAULT_ROOT}}`  <!-- Set to your Obsidian vault path -->
+Scripts dir: `{{SCRIPTS_DIR}}`  <!-- Set to the research-workflow project path -->
+Python: `{{PYTHON_PATH}}`  <!-- Set to your Python 3.12+ executable path -->
 
 ---
 
@@ -53,7 +53,7 @@ The argument is everything after `/research `.
 **Case A — Topics only (no known URLs):**
 
 Read the `research-search` skill:
-`C:\Users\tim\.claude\skills\research-search\SKILL.md`
+`{{HOME}}/.claude/skills/research-search/SKILL.md`
 
 For each topic, spawn a Haiku agent:
 - `subagent_type`: `general-purpose`
@@ -98,17 +98,17 @@ Run Case A for topics, then add the known URLs to `selected_urls` with `relevanc
 ## Step 3: Fetch Content via Python
 
 Write the `search_context` JSON to a temporary file using the Write tool:
-- Path: `C:\Users\tim\OneDrive\Documents\Projects\research-workflow\.tmp\search_context.json`
-- Create the `.tmp` directory if it doesn't exist (use Bash: `mkdir -p "C:/Users/tim/OneDrive/Documents/Projects/research-workflow/.tmp"`)
+- Path: `{{SCRIPTS_DIR}}/.tmp/search_context.json`
+- Create the `.tmp` directory if it doesn't exist (use Bash: `mkdir -p "{{SCRIPTS_DIR}}/.tmp"`)
 
 Run the fetch script using Bash:
 ```bash
-"C:\Users\tim\AppData\Local\Programs\Python\Python312\python.exe" "C:\Users\tim\OneDrive\Documents\Projects\research-workflow\fetch_and_clean.py" --input "C:\Users\tim\OneDrive\Documents\Projects\research-workflow\.tmp\search_context.json" --output "C:\Users\tim\OneDrive\Documents\Projects\research-workflow\.tmp\fetch_results.json"
+"{{PYTHON_PATH}}" "{{SCRIPTS_DIR}}/fetch_and_clean.py" --input "{{SCRIPTS_DIR}}/.tmp/search_context.json" --output "{{SCRIPTS_DIR}}/.tmp/fetch_results.json"
 ```
 
 Wait for it to complete. If it exits with a non-zero code, output the stderr and stop.
 
-Read `C:\Users\tim\OneDrive\Documents\Projects\research-workflow\.tmp\fetch_results.json`.
+Read `{{SCRIPTS_DIR}}/.tmp/fetch_results.json`.
 
 If `fetched` is empty and `failed` is non-empty, output:
 `Fetch failed for all URLs. Errors: [list failed[].error]`
@@ -123,7 +123,7 @@ Then continue.
 ## Step 4: Classify via Haiku
 
 Read the `research-classify` skill:
-`C:\Users\tim\.claude\skills\research-classify\SKILL.md`
+`{{HOME}}/.claude/skills/research-classify/SKILL.md`
 
 Spawn a Haiku agent:
 - `subagent_type`: `general-purpose`
@@ -171,7 +171,7 @@ Write the complete note content following ALL of these rules:
 
 ### 5c. Write the note
 
-- `create`: Write to `C:\Users\tim\OneDrive\Documents\Tim's Vault\{folder}\{filename}`
+- `create`: Write to `{{VAULT_ROOT}}/{folder}/{filename}`
 - `update`: Overwrite the existing note path
 
 ### 5d. Update MOC notes

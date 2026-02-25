@@ -67,7 +67,8 @@ def main():
 
     console.print(f"\n[green]Succeeded:[/green] {succeeded} / {len(urls)}")
     if failed:
-        failed_path = Path("failed_urls.txt")
+        failed_path = Path(__file__).parent / ".tmp" / "failed_urls.txt"
+        failed_path.parent.mkdir(parents=True, exist_ok=True)
         write_failed_urls(failed, failed_path)
         console.print(f"[yellow]Failed URLs written to:[/yellow] {failed_path}")
 

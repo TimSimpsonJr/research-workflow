@@ -3,7 +3,7 @@ fetch_and_clean.py — URL Fetch, Clean, and Cache
 
 Purpose: Tier 2 of the research pipeline. Accepts a search_context JSON,
 fetches each URL via Jina Reader (with Wayback Machine fallback), caches
-results by MD5(url), and outputs fetch_results JSON.
+results by SHA-256(url), and outputs fetch_results JSON.
 
 Usage:
     python fetch_and_clean.py --input search_context.json
@@ -17,9 +17,13 @@ import argparse
 import hashlib
 import json
 import os
+import socket
 import sys
+import time
 from datetime import datetime, timezone, timedelta
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -29,18 +33,54 @@ import requests
 
 DEFAULT_CACHE_DIR = Path(__file__).parent / ".cache" / "fetch"
 DEFAULT_TTL_DAYS = 7
+DEFAULT_FETCH_DELAY = 1.0  # seconds between fetches
 MAX_CONTENT_CHARS = 50_000
 JINA_BASE_URL = "https://r.jina.ai"
 WAYBACK_API = "https://archive.org/wayback/available"
+
+# Private/reserved IP ranges that should never be fetched
+_BLOCKED_HOSTNAMES = {"localhost", "localhost.localdomain"}
 
 
 # ──────────────────────────────────────────────
 # URL helpers
 # ──────────────────────────────────────────────
 
+def validate_url(url: str) -> None:
+    """Reject URLs targeting private/internal networks (SSRF protection).
+
+    Raises ValueError if the URL scheme is not http/https or resolves to
+    a private, loopback, reserved, or link-local IP address.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Blocked URL scheme '{parsed.scheme}': {url}")
+
+    hostname = parsed.hostname or ""
+    if hostname in _BLOCKED_HOSTNAMES:
+        raise ValueError(f"Blocked hostname '{hostname}': {url}")
+
+    try:
+        addr = ip_address(hostname)
+        if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+            raise ValueError(f"Blocked private/reserved IP '{hostname}': {url}")
+    except ValueError as orig:
+        # hostname is not an IP literal — resolve it
+        if "Blocked" in str(orig):
+            raise
+        try:
+            resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+            for family, _type, _proto, _canon, sockaddr in resolved:
+                addr = ip_address(sockaddr[0])
+                if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                    raise ValueError(f"Blocked: '{hostname}' resolves to private IP {addr}: {url}")
+        except socket.gaierror:
+            pass  # Let the actual fetch handle DNS failures
+
+
 def url_cache_key(url: str) -> str:
-    """Return MD5 hash of URL as cache filename key."""
-    return hashlib.md5(url.encode("utf-8")).hexdigest()
+    """Return SHA-256 hash of URL as cache filename key."""
+    return hashlib.sha256(url.encode("utf-8")).hexdigest()
 
 
 def normalize_url(url: str) -> str:
@@ -64,15 +104,26 @@ def deduplicate_urls(urls: list[dict]) -> list[dict]:
 # Cache helpers
 # ──────────────────────────────────────────────
 
+def _content_hash(content: str) -> str:
+    """SHA-256 hash of content for cache integrity verification."""
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
 def load_cache(cache_dir: Path, cache_key: str) -> dict | None:
-    """Return cached entry dict, or None if missing or corrupt."""
+    """Return cached entry dict, or None if missing, corrupt, or tampered."""
     cache_file = cache_dir / f"{cache_key}.json"
     if not cache_file.exists():
         return None
     try:
-        return json.loads(cache_file.read_text(encoding="utf-8"))
+        entry = json.loads(cache_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+    # Integrity check: verify content hash if present
+    stored_hash = entry.get("content_hash")
+    if stored_hash and _content_hash(entry.get("content", "")) != stored_hash:
+        print(f"[fetch_and_clean] WARNING: cache integrity check failed for {cache_key}", file=sys.stderr)
+        return None
+    return entry
 
 
 def is_expired(entry: dict, ttl_days: int) -> bool:
@@ -87,8 +138,10 @@ def is_expired(entry: dict, ttl_days: int) -> bool:
 
 
 def save_cache(cache_dir: Path, cache_key: str, entry: dict) -> None:
-    """Write entry JSON to cache file. Creates cache_dir if needed."""
+    """Write entry JSON to cache file with integrity hash. Creates cache_dir if needed."""
     cache_dir.mkdir(parents=True, exist_ok=True)
+    if "content" in entry:
+        entry["content_hash"] = _content_hash(entry["content"])
     cache_file = cache_dir / f"{cache_key}.json"
     cache_file.write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -101,7 +154,9 @@ def fetch_via_jina(url: str, api_key: str | None = None) -> tuple[str, str]:
     """
     Fetch URL via Jina Reader API (https://r.jina.ai).
     Returns (content_markdown, title).
+    Raises ValueError if the URL targets a private/internal address.
     """
+    validate_url(url)
     jina_url = f"{JINA_BASE_URL}/{url}"
     headers = {"Accept": "text/markdown"}
     if api_key:
@@ -141,8 +196,10 @@ def fetch_url(url: str, jina_api_key: str | None = None) -> tuple[str, str, str]
     try:
         content, title = fetch_via_jina(url, jina_api_key)
         return content, title, "jina"
-    except Exception:
-        pass
+    except ValueError:
+        raise  # SSRF validation errors should not be retried
+    except Exception as exc:
+        print(f"[fetch_and_clean] Jina fetch failed for {url}: {exc}", file=sys.stderr)
 
     try:
         content, title = fetch_via_wayback(url, jina_api_key)
@@ -160,6 +217,7 @@ def process_urls(
     cache_dir: Path,
     ttl_days: int,
     jina_api_key: str | None,
+    fetch_delay: float = DEFAULT_FETCH_DELAY,
 ) -> tuple[list[dict], list[dict]]:
     """
     Fetch and cache a list of URL dicts. Each dict must have a "url" key.
@@ -168,6 +226,7 @@ def process_urls(
     """
     fetched: list[dict] = []
     failed: list[dict] = []
+    last_fetch_time: float = 0
 
     for item in urls:
         url = item["url"]
@@ -188,9 +247,13 @@ def process_urls(
             })
             continue
 
-        # Cache miss or expired — fetch
+        # Cache miss or expired — fetch (with rate limiting)
+        elapsed = time.monotonic() - last_fetch_time
+        if elapsed < fetch_delay and last_fetch_time > 0:
+            time.sleep(fetch_delay - elapsed)
         try:
             content, title, method = fetch_url(url, jina_api_key)
+            last_fetch_time = time.monotonic()
             content = content[:MAX_CONTENT_CHARS]
             now = datetime.now(timezone.utc).isoformat()
 

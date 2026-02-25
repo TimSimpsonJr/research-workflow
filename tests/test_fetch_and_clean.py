@@ -15,11 +15,11 @@ os.environ.setdefault("INBOX_PATH", "C:/fake/vault/Inbox")
 
 # ── url_cache_key ────────────────────────────
 
-def test_url_cache_key_is_md5():
+def test_url_cache_key_is_sha256():
     from fetch_and_clean import url_cache_key
     import hashlib
     url = "https://example.com/article"
-    expected = hashlib.md5(url.encode("utf-8")).hexdigest()
+    expected = hashlib.sha256(url.encode("utf-8")).hexdigest()
     assert url_cache_key(url) == expected
 
 

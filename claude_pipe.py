@@ -149,7 +149,10 @@ def main():
     )
 
     if args.output:
-        out_path = Path(args.output)
+        out_path = Path(args.output).resolve()
+        vault_resolved = config.VAULT_PATH.resolve()
+        if not str(out_path).startswith(str(vault_resolved)):
+            console.print(f"[yellow]Warning: output path is outside the vault: {out_path}[/yellow]")
         write_output(response_text, out_path, source_note=str(file_path), prompt_used=args.prompt)
         console.print(f"[green]Output written:[/green] {out_path}")
     else:

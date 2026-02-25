@@ -89,7 +89,11 @@ def main():
 
     startup_checks()
 
-    target = config.VAULT_PATH / args.folder if args.folder else config.VAULT_PATH
+    target = (config.VAULT_PATH / args.folder).resolve() if args.folder else config.VAULT_PATH
+    vault_resolved = config.VAULT_PATH.resolve()
+    if not str(target).startswith(str(vault_resolved)):
+        console.print(f"[red]Folder escapes vault path: {args.folder}[/red]")
+        sys.exit(1)
     if not target.exists():
         console.print(f"[red]Folder not found: {target}[/red]")
         sys.exit(1)

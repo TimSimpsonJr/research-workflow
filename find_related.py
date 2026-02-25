@@ -64,7 +64,7 @@ def search_vault_ripgrep(
     for kw in keywords:
         try:
             result = subprocess.run(
-                ["rg", "-il", kw, str(vault_path)],
+                ["rg", "-il", "--", kw, str(vault_path)],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -74,8 +74,8 @@ def search_vault_ripgrep(
                 if source_path and p == source_path:
                     continue
                 scores[p] = scores.get(p, 0) + 1
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[find_related] ripgrep error for keyword '{kw}': {exc}", file=sys.stderr)
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     return [{"file": f, "score": s} for f, s in ranked[:top_n]]
 

@@ -12,6 +12,7 @@ Dependencies: anthropic, rich, python-dotenv. Optional: repomix (npm install -g 
 """
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -31,9 +32,9 @@ TOKEN_CONFIRM_THRESHOLD = 100_000
 
 
 REPOMIX_FALLBACK_PATHS = [
-    r"C:\Users\tim\AppData\Roaming\npm\node_modules\repomix\bin\repomix.cjs",
-]
-NODE_FALLBACK_PATH = r"C:\Program Files\nodejs\node.exe"
+    p for p in [os.environ.get("REPOMIX_PATH")] if p
+] or []
+NODE_FALLBACK_PATH = os.environ.get("NODE_PATH", "")
 
 
 def find_repomix() -> tuple[str, ...] | None:
@@ -182,7 +183,10 @@ def main():
     full_output = frontmatter + response_text
 
     out_dir = config.MOCS_PATH if config.MOCS_PATH and config.MOCS_PATH.exists() else config.VAULT_PATH
-    out_path = out_dir / args.output
+    out_path = (out_dir / args.output).resolve()
+    if not str(out_path).startswith(str(out_dir.resolve())):
+        console.print(f"[red]Output path escapes target directory: {args.output}[/red]")
+        sys.exit(1)
     out_path.write_text(full_output, encoding="utf-8", newline="\n")
     console.print(f"[green]MOC written:[/green] {out_path}")
 

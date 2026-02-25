@@ -81,7 +81,10 @@ def main():
         console.print(f"[red]Transcript not found: {transcript_path}[/red]")
         sys.exit(1)
 
-    output_dir = Path(args.output_dir) if args.output_dir else config.INBOX_PATH
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else config.INBOX_PATH
+    vault_resolved = config.VAULT_PATH.resolve()
+    if not str(output_dir).startswith(str(vault_resolved)):
+        console.print(f"[yellow]Warning: output dir is outside the vault: {output_dir}[/yellow]")
     if not output_dir.exists():
         console.print(f"[yellow]Output dir not found, creating: {output_dir}[/yellow]")
         output_dir.mkdir(parents=True)
