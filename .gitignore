@@ -4,3 +4,9 @@ __pycache__/
 *.pyo
 .pytest_cache/
 repomix-output.txt
+config.py
+.venv/
+venv/
+*.log
+Thumbs.db
+desktop.ini
