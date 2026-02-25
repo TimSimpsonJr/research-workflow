@@ -14,53 +14,42 @@ Everything runs locally through the Claude API. Your vault stays on your machine
 
 ## What you need
 
-- An [Obsidian](https://obsidian.md/) vault (the folder of markdown files you already have)
-- An [Anthropic API key](https://console.anthropic.com/) (costs a few cents per research run)
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (the CLI tool that runs the skills)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and working
+- An [Obsidian](https://obsidian.md/) vault
+- An [Anthropic API key](https://console.anthropic.com/) (if Claude Code is working, you already have one)
 - Python 3.10 or newer
-
-If you're not sure whether you have Python installed, open a terminal and type `python --version`. If you get a version number back, you're good. If not, grab it from [python.org](https://www.python.org/downloads/).
 
 ## Setup
 
-### 1. Clone the repo and install dependencies
+The easiest way to set this up is to let Claude Code do it for you. Start a Claude Code session and ask it to help you install.
 
-Open a terminal and run:
+Or do it yourself:
 
-```bash
+### 1. Clone and install
+
+In Claude Code, or in any terminal:
+
+```
 git clone https://github.com/TimSimpsonJr/research-workflow.git
 cd research-workflow
 pip install -r requirements.txt
 ```
 
-`pip install` downloads the Python libraries this project depends on. You only need to do this once.
+### 2. Configure your vault
 
-### 2. Point the toolkit at your vault
-
-```bash
+```
 python discover_vault.py
 ```
 
-This looks at your vault's folder structure and generates two files:
+This scans your vault's folder structure and generates `config.py` (paths) and `.env` (API key). Open `.env` and paste your Anthropic API key on the `ANTHROPIC_API_KEY=` line. If you're already using Claude Code, this is the same key from your `ANTHROPIC_API_KEY` environment variable.
 
-- `config.py` — paths to your vault, inbox, and other folders it detected
-- `.env` — where your API key goes
+### 3. Install the skills
 
-Open `.env` in a text editor and paste your Anthropic API key on the `ANTHROPIC_API_KEY=` line.
+The research pipeline runs through [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) — markdown files that teach Claude Code how to do specific tasks. You need to copy them to your skills directory and fill in your paths.
 
-### 3. Verify it worked
+Copy the three active skill folders into `~/.claude/skills/`:
 
-```bash
-python -c "import config; print(config.VAULT_PATH, config.INBOX_PATH)"
 ```
-
-You should see the paths to your vault and inbox printed back. If you get an error, double-check that `.env` has your API key and that the paths in `config.py` look right.
-
-### 4. Install the Claude Code skills
-
-Copy the skill folders into your Claude Code skills directory:
-
-```bash
 # macOS / Linux
 cp -r skills/research ~/.claude/skills/research
 cp -r skills/research-search ~/.claude/skills/research-search
@@ -72,12 +61,26 @@ Copy-Item -Recurse skills\research-search $env:USERPROFILE\.claude\skills\resear
 Copy-Item -Recurse skills\research-classify $env:USERPROFILE\.claude\skills\research-classify
 ```
 
-Then open the skill files and replace the `{{placeholder}}` paths with your actual paths:
+Then open each skill's `SKILL.md` and replace the `{{placeholder}}` values with your actual paths:
 
-- `{{VAULT_ROOT}}` — your Obsidian vault folder (e.g., `C:\Users\you\Documents\My Vault`)
-- `{{SCRIPTS_DIR}}` — wherever you cloned this repo (e.g., `C:\Users\you\Projects\research-workflow`)
-- `{{PYTHON_PATH}}` — your Python executable (whatever `python --version` works with)
-- `{{HOME}}` — your home directory (e.g., `C:\Users\you` or `/Users/you`)
+| Placeholder | What to put there | Example |
+|-------------|-------------------|---------|
+| `{{VAULT_ROOT}}` | Your Obsidian vault folder | `C:\Users\you\Documents\My Vault` |
+| `{{SCRIPTS_DIR}}` | Where you cloned this repo | `C:\Users\you\Projects\research-workflow` |
+| `{{PYTHON_PATH}}` | Your Python executable | `C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe` |
+| `{{HOME}}` | Your home directory | `C:\Users\you` or `/Users/you` |
+
+Only the `research` orchestrator skill and `research-classify` skill need these — `research-search` has no path references.
+
+### 4. Try it out
+
+Start a Claude Code session and type:
+
+```
+/research "any topic you're curious about"
+```
+
+Claude will search the web, fetch the best sources, figure out where notes belong in your vault, and write them. The first run takes a minute or two — subsequent runs are faster because fetched pages are cached locally.
 
 ## Research Pipeline (3-Tier)
 
