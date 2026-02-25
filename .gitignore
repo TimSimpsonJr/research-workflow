@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 .pytest_cache/
+.cache/
 repomix-output.txt
 config.py
 .venv/
