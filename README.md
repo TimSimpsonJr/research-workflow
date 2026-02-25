@@ -12,76 +12,6 @@ Research in Obsidian means a lot of manual work: finding sources, reading articl
 
 Everything runs locally through the Claude API. Your vault stays on your machine, and fetched web content is cached so you're not re-downloading pages you've already read.
 
-## What you need
-
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and working
-- An [Obsidian](https://obsidian.md/) vault
-- An [Anthropic API key](https://console.anthropic.com/) (if Claude Code is working, you already have one)
-- Python 3.10 or newer
-
-## Setup
-
-The easiest way to set this up is to let Claude Code do it for you. Start a Claude Code session and ask it to help you install.
-
-Or do it yourself:
-
-### 1. Clone and install
-
-In Claude Code, or in any terminal:
-
-```
-git clone https://github.com/TimSimpsonJr/research-workflow.git
-cd research-workflow
-pip install -r requirements.txt
-```
-
-### 2. Configure your vault
-
-```
-python discover_vault.py
-```
-
-This scans your vault's folder structure and generates `config.py` (paths) and `.env` (API key). Open `.env` and paste your Anthropic API key on the `ANTHROPIC_API_KEY=` line. If you're already using Claude Code, this is the same key from your `ANTHROPIC_API_KEY` environment variable.
-
-### 3. Install the skills
-
-The research pipeline runs through [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) — markdown files that teach Claude Code how to do specific tasks. You need to copy them to your skills directory and fill in your paths.
-
-Copy the three active skill folders into `~/.claude/skills/`:
-
-```
-# macOS / Linux
-cp -r skills/research ~/.claude/skills/research
-cp -r skills/research-search ~/.claude/skills/research-search
-cp -r skills/research-classify ~/.claude/skills/research-classify
-
-# Windows (PowerShell)
-Copy-Item -Recurse skills\research $env:USERPROFILE\.claude\skills\research
-Copy-Item -Recurse skills\research-search $env:USERPROFILE\.claude\skills\research-search
-Copy-Item -Recurse skills\research-classify $env:USERPROFILE\.claude\skills\research-classify
-```
-
-Then open each skill's `SKILL.md` and replace the `{{placeholder}}` values with your actual paths:
-
-| Placeholder | What to put there | Example |
-|-------------|-------------------|---------|
-| `{{VAULT_ROOT}}` | Your Obsidian vault folder | `C:\Users\you\Documents\My Vault` |
-| `{{SCRIPTS_DIR}}` | Where you cloned this repo | `C:\Users\you\Projects\research-workflow` |
-| `{{PYTHON_PATH}}` | Your Python executable | `C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe` |
-| `{{HOME}}` | Your home directory | `C:\Users\you` or `/Users/you` |
-
-Only the `research` orchestrator skill and `research-classify` skill need these — `research-search` has no path references.
-
-### 4. Try it out
-
-Start a Claude Code session and type:
-
-```
-/research "any topic you're curious about"
-```
-
-Claude will search the web, fetch the best sources, figure out where notes belong in your vault, and write them. The first run takes a minute or two — subsequent runs are faster because fetched pages are cached locally.
-
 ## Research Pipeline (3-Tier)
 
 The main feature is a 3-tier research pipeline invoked via Claude Code's `/research` command. It takes a topic or note path and produces fully-formed vault notes.
@@ -154,6 +84,76 @@ Available via `produce_output.py --format <name>`:
 - `email_newsletter` — Email newsletter
 
 List all: `python produce_output.py --list-formats`
+
+## What you need
+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and working
+- An [Obsidian](https://obsidian.md/) vault
+- An [Anthropic API key](https://console.anthropic.com/) (if Claude Code is working, you already have one)
+- Python 3.10 or newer
+
+## Setup
+
+The easiest way to set this up is to let Claude Code do it for you. Start a Claude Code session and ask it to help you install.
+
+Or do it yourself:
+
+### 1. Clone and install
+
+In Claude Code, or in any terminal:
+
+```
+git clone https://github.com/TimSimpsonJr/research-workflow.git
+cd research-workflow
+pip install -r requirements.txt
+```
+
+### 2. Configure your vault
+
+```
+python discover_vault.py
+```
+
+This scans your vault's folder structure and generates `config.py` (paths) and `.env` (API key). Open `.env` and paste your Anthropic API key on the `ANTHROPIC_API_KEY=` line. If you're already using Claude Code, this is the same key from your `ANTHROPIC_API_KEY` environment variable.
+
+### 3. Install the skills
+
+The research pipeline runs through [Claude Code skills](https://docs.anthropic.com/en/docs/claude-code/skills) — markdown files that teach Claude Code how to do specific tasks. You need to copy them to your skills directory and fill in your paths.
+
+Copy the three active skill folders into `~/.claude/skills/`:
+
+```
+# macOS / Linux
+cp -r skills/research ~/.claude/skills/research
+cp -r skills/research-search ~/.claude/skills/research-search
+cp -r skills/research-classify ~/.claude/skills/research-classify
+
+# Windows (PowerShell)
+Copy-Item -Recurse skills\research $env:USERPROFILE\.claude\skills\research
+Copy-Item -Recurse skills\research-search $env:USERPROFILE\.claude\skills\research-search
+Copy-Item -Recurse skills\research-classify $env:USERPROFILE\.claude\skills\research-classify
+```
+
+Then open each skill's `SKILL.md` and replace the `{{placeholder}}` values with your actual paths:
+
+| Placeholder | What to put there | Example |
+|-------------|-------------------|---------|
+| `{{VAULT_ROOT}}` | Your Obsidian vault folder | `C:\Users\you\Documents\My Vault` |
+| `{{SCRIPTS_DIR}}` | Where you cloned this repo | `C:\Users\you\Projects\research-workflow` |
+| `{{PYTHON_PATH}}` | Your Python executable | `C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe` |
+| `{{HOME}}` | Your home directory | `C:\Users\you` or `/Users/you` |
+
+Only the `research` orchestrator skill and `research-classify` skill need these — `research-search` has no path references.
+
+### 4. Try it out
+
+Start a Claude Code session and type:
+
+```
+/research "any topic you're curious about"
+```
+
+Claude will search the web, fetch the best sources, figure out where notes belong in your vault, and write them. The first run takes a minute or two — subsequent runs are faster because fetched pages are cached locally.
 
 ## Running Tests
 
