@@ -49,6 +49,8 @@ def build_message(file_content: str, prompt_template: str) -> str:
 
 def estimate_cost(input_tokens: int, output_tokens: int, model: str) -> float:
     """Estimate USD cost for a Claude API call."""
+    if model not in COST_PER_M_INPUT:
+        console.print(f"[yellow]Warning: unknown model '{model}', using Opus pricing for cost estimate[/yellow]")
     in_rate = COST_PER_M_INPUT.get(model, 15.0)
     out_rate = COST_PER_M_OUTPUT.get(model, 75.0)
     return (input_tokens / 1_000_000 * in_rate) + (output_tokens / 1_000_000 * out_rate)
@@ -56,7 +58,9 @@ def estimate_cost(input_tokens: int, output_tokens: int, model: str) -> float:
 
 def call_claude(message: str, model: str, max_tokens: int) -> tuple[str, dict]:
     """Send message to Claude API, return (response_text, usage_dict)."""
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    # Let the SDK read ANTHROPIC_API_KEY from the environment rather than
+    # passing it explicitly, keeping the key out of constructor arguments.
+    client = anthropic.Anthropic()
     response = client.messages.create(
         model=model,
         max_tokens=max_tokens,
@@ -78,11 +82,12 @@ def write_output(
 ) -> None:
     """Write Claude response as a markdown file with frontmatter."""
     now = datetime.now(timezone.utc).isoformat()
+    # Quote string values to handle paths with colons, backslashes, etc.
     frontmatter = (
         f"---\n"
-        f"source_note: {source_note}\n"
+        f'source_note: "{source_note}"\n'
         f"generated_at: {now}\n"
-        f"prompt_used: {prompt_used}\n"
+        f'prompt_used: "{prompt_used}"\n'
         f"---\n\n"
     )
     output_path.write_text(frontmatter + response_text, encoding="utf-8", newline="\n")

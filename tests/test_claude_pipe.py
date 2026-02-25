@@ -37,20 +37,19 @@ def test_load_prompt_template_missing(tmp_path):
 
 
 def test_build_message():
-    """build_message concatenates file content and prompt with separator."""
+    """build_message concatenates file content and prompt with exact separator."""
     from claude_pipe import build_message
     result = build_message("File content here.", "Summarize this.")
-    assert "File content here." in result
-    assert "Summarize this." in result
-    assert "---" in result
+    assert result == "File content here.\n\n---\nSummarize this."
 
 
 def test_estimate_cost():
-    """estimate_cost returns a float for given token counts."""
+    """estimate_cost returns correct USD value for known token counts."""
     from claude_pipe import estimate_cost
+    # Haiku: $0.25/M input, $1.25/M output
+    # 1000 input: 0.00025, 500 output: 0.000625 → 0.000875
     cost = estimate_cost(1000, 500, model="claude-haiku-4-5-20251001")
-    assert isinstance(cost, float)
-    assert cost > 0
+    assert abs(cost - 0.000875) < 1e-9
 
 
 def test_call_claude_returns_text(tmp_path):
@@ -73,12 +72,18 @@ def test_call_claude_returns_text(tmp_path):
 
 
 def test_write_output_with_frontmatter(tmp_path):
-    """write_output writes markdown with frontmatter when output path given."""
+    """write_output writes parseable YAML frontmatter and response body."""
+    import yaml
     from claude_pipe import write_output
     out_file = tmp_path / "result.md"
     write_output("Response text", out_file, source_note="note.md", prompt_used="summarize")
     content = out_file.read_text(encoding="utf-8")
-    assert "---" in content
-    assert "source_note: note.md" in content
-    assert "prompt_used: summarize" in content
+    # Verify frontmatter is delimited correctly
+    parts = content.split("---")
+    assert len(parts) >= 3
+    fm = yaml.safe_load(parts[1])
+    assert fm["source_note"] == "note.md"
+    assert fm["prompt_used"] == "summarize"
+    assert "generated_at" in fm
+    # Verify body follows frontmatter
     assert "Response text" in content
