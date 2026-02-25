@@ -56,7 +56,7 @@ def test_build_frontmatter_list_tags():
         tag_format="list",
         extra_fields=["summary"],
     )
-    assert "title: Test Article" in fm
+    assert 'title: "Test Article"' in fm
     assert "source: https://example.com" in fm
     assert "- inbox" in fm
     assert "- unprocessed" in fm

@@ -56,13 +56,15 @@ def build_frontmatter(
     else:
         tags_line = "tags:\n  - inbox\n  - unprocessed"
 
-    extras = "\n".join(f"{field}: " for field in extra_fields if field not in
-                       {"title", "source", "fetched_at", "tags"})
+    extras = "\n".join(f"{field}: " for field in extra_fields
+                       if field and field not in {"title", "source", "fetched_at", "tags"})
     extras_block = f"\n{extras}" if extras else ""
 
+    # Quote title to handle colons, hashes, or other YAML special characters
+    safe_title = title.replace('"', '\\"')
     return (
         f"---\n"
-        f"title: {title}\n"
+        f'title: "{safe_title}"\n'
         f"source: {source}\n"
         f"fetched_at: {fetched_at}\n"
         f"{tags_line}{extras_block}\n"
@@ -114,7 +116,7 @@ def ingest_url(url: str, dry_run: bool = False) -> Path | None:
         content = fetch_url(url)
 
     title = extract_title(content, url)
-    slug = slugify(title)
+    slug = slugify(title) or slugify(urlparse(url).netloc) or "untitled"
     now = datetime.now(timezone.utc)
     date_str = now.strftime(config.DATE_FORMAT)
     fetched_at = now.isoformat()
@@ -129,8 +131,12 @@ def ingest_url(url: str, dry_run: bool = False) -> Path | None:
     full_content = frontmatter + content
 
     if dry_run:
-        console.print(f"[yellow]Dry run — would write to: {config.INBOX_PATH / f'{date_str}-{slug}.md'}[/yellow]")
-        console.print(full_content[:300] + "...")
+        preview_path = unique_output_path(config.INBOX_PATH, date_str, slug)
+        console.print(f"[yellow]Dry run — would write to: {preview_path}[/yellow]")
+        preview = full_content[:300]
+        if len(full_content) > 300:
+            preview += "..."
+        console.print(preview)
         return None
 
     out_path = unique_output_path(config.INBOX_PATH, date_str, slug)
