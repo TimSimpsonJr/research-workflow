@@ -12,34 +12,72 @@ Research in Obsidian means a lot of manual work: finding sources, reading articl
 
 Everything runs locally through the Claude API. Your vault stays on your machine, and fetched web content is cached so you're not re-downloading pages you've already read.
 
-## Prerequisites
+## What you need
 
-- Python 3.10+
-- An Anthropic API key
-- An Obsidian vault
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (for the research pipeline skills)
+- An [Obsidian](https://obsidian.md/) vault (the folder of markdown files you already have)
+- An [Anthropic API key](https://console.anthropic.com/) (costs a few cents per research run)
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (the CLI tool that runs the skills)
+- Python 3.10 or newer
 
-## Quick Start
+If you're not sure whether you have Python installed, open a terminal and type `python --version`. If you get a version number back, you're good. If not, grab it from [python.org](https://www.python.org/downloads/).
 
-**1. Install dependencies**
+## Setup
+
+### 1. Clone the repo and install dependencies
+
+Open a terminal and run:
 
 ```bash
+git clone https://github.com/TimSimpsonJr/research-workflow.git
+cd research-workflow
 pip install -r requirements.txt
 ```
 
-**2. Configure your vault**
+`pip install` downloads the Python libraries this project depends on. You only need to do this once.
+
+### 2. Point the toolkit at your vault
 
 ```bash
 python discover_vault.py
 ```
 
-This scans your vault, generates `config.py` and `.env`. Review `.env` and fill in `ANTHROPIC_API_KEY`.
+This looks at your vault's folder structure and generates two files:
 
-**3. Verify config**
+- `config.py` — paths to your vault, inbox, and other folders it detected
+- `.env` — where your API key goes
+
+Open `.env` in a text editor and paste your Anthropic API key on the `ANTHROPIC_API_KEY=` line.
+
+### 3. Verify it worked
 
 ```bash
 python -c "import config; print(config.VAULT_PATH, config.INBOX_PATH)"
 ```
+
+You should see the paths to your vault and inbox printed back. If you get an error, double-check that `.env` has your API key and that the paths in `config.py` look right.
+
+### 4. Install the Claude Code skills
+
+Copy the skill folders into your Claude Code skills directory:
+
+```bash
+# macOS / Linux
+cp -r skills/research ~/.claude/skills/research
+cp -r skills/research-search ~/.claude/skills/research-search
+cp -r skills/research-classify ~/.claude/skills/research-classify
+
+# Windows (PowerShell)
+Copy-Item -Recurse skills\research $env:USERPROFILE\.claude\skills\research
+Copy-Item -Recurse skills\research-search $env:USERPROFILE\.claude\skills\research-search
+Copy-Item -Recurse skills\research-classify $env:USERPROFILE\.claude\skills\research-classify
+```
+
+Then open the skill files and replace the `{{placeholder}}` paths with your actual paths:
+
+- `{{VAULT_ROOT}}` — your Obsidian vault folder (e.g., `C:\Users\you\Documents\My Vault`)
+- `{{SCRIPTS_DIR}}` — wherever you cloned this repo (e.g., `C:\Users\you\Projects\research-workflow`)
+- `{{PYTHON_PATH}}` — your Python executable (whatever `python --version` works with)
+- `{{HOME}}` — your home directory (e.g., `C:\Users\you` or `/Users/you`)
 
 ## Research Pipeline (3-Tier)
 
