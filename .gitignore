@@ -11,3 +11,4 @@ venv/
 *.log
 Thumbs.db
 desktop.ini
+.tmp/
