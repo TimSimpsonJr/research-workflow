@@ -1,0 +1,1 @@
+Summarize the above content concisely. Identify: the main argument or finding, key facts or data points, and the primary significance of this material. Output 3-5 sentences of summary, followed by a "Key Points" section with 3-5 bullet points. Do not editorialize — stay close to what the source actually says.

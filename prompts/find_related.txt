@@ -1,0 +1,1 @@
+Extract exactly 10 search keywords or short phrases from the following note that would be most useful for finding related documents in a research database. Prioritize specific nouns, named entities, and domain-specific terms over generic words. Return only the terms, one per line, no explanation, no numbering.

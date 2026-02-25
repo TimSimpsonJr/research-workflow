@@ -1,0 +1,1 @@
+Identify all individuals, organizations, government bodies, and companies mentioned in the above content. For each, note: their name, their role or position, and their apparent stance on the primary issue discussed. Format as a markdown table with columns: Name | Type | Role | Stance.

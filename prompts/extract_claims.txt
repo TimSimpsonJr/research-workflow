@@ -1,0 +1,1 @@
+Extract the key factual claims from the above content. For each claim: state it clearly and directly, identify who is making it, and flag whether it is presented as established fact, opinion, or speculation. Format as a numbered list. Include only claims that are substantive and specific — skip boilerplate and filler.
