@@ -117,3 +117,23 @@ def test_sample_tag_format_inline(tmp_path):
     note.write_text("---\ntags: [research, ai]\n---\n# Title\n", encoding="utf-8")
     result = sample_tag_format(tmp_path)
     assert result == "inline"
+
+
+def test_detect_tag_format_from_text_list():
+    from discover_vault import detect_tag_format_from_text
+    assert detect_tag_format_from_text("---\ntags:\n  - research\n---\n") == "list"
+
+
+def test_detect_tag_format_from_text_inline():
+    from discover_vault import detect_tag_format_from_text
+    assert detect_tag_format_from_text("---\ntags: [research, ai]\n---\n") == "inline"
+
+
+def test_detect_tag_format_from_text_no_frontmatter():
+    from discover_vault import detect_tag_format_from_text
+    assert detect_tag_format_from_text("# Just a note\nno frontmatter") is None
+
+
+def test_detect_tag_format_from_text_no_tags_key():
+    from discover_vault import detect_tag_format_from_text
+    assert detect_tag_format_from_text("---\ntitle: My Note\n---\n") is None
