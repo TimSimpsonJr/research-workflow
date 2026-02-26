@@ -89,6 +89,7 @@ def test_generate_env_content():
         daily_path=Path("C:/Users/tim/OneDrive/Documents/Tim's Vault/Daily"),
         mocs_path=None,
         output_path=None,
+        attachments_path=None,
         tagging_note_path=None,
         api_key="sk-ant-test123",
         tag_format="list",

@@ -21,6 +21,7 @@ INBOX_PATTERNS = {"inbox", "capture", "queue"}
 DAILY_PATTERNS = {"daily", "journal", "calendar", "daily notes"}
 MOCS_PATTERNS = {"mocs", "maps", "index"}
 OUTPUT_PATTERNS = {"output", "publish", "production", "export"}
+ATTACHMENTS_PATTERNS = {"attachments", "assets", "media", "files", "images"}
 
 
 def categorize_folder(name: str) -> str | None:
@@ -34,6 +35,8 @@ def categorize_folder(name: str) -> str | None:
         return "mocs"
     if lower in OUTPUT_PATTERNS or any(p in lower for p in OUTPUT_PATTERNS):
         return "output"
+    if lower in ATTACHMENTS_PATTERNS or any(p in lower for p in ATTACHMENTS_PATTERNS):
+        return "attachments"
     return None
 
 
@@ -87,6 +90,7 @@ def generate_env_content(
     daily_path: Path | None,
     mocs_path: Path | None,
     output_path: Path | None,
+    attachments_path: Path | None,
     tagging_note_path: Path | None,
     api_key: str,
     tag_format: str,
@@ -100,6 +104,7 @@ def generate_env_content(
         f"DAILY_PATH={daily_path or ''}",
         f"MOCS_PATH={mocs_path or ''}",
         f"OUTPUT_PATH={output_path or ''}",
+        f"ATTACHMENTS_PATH={attachments_path or ''}",
         f"TAGGING_NOTE_PATH={tagging_note_path or ''}",
         f"ANTHROPIC_API_KEY={api_key}",
         f"TAG_FORMAT={tag_format}",
@@ -128,6 +133,7 @@ INBOX_PATH = Path(os.environ["INBOX_PATH"])
 DAILY_PATH = Path(os.environ.get("DAILY_PATH", "")) if os.environ.get("DAILY_PATH") else None
 MOCS_PATH = Path(os.environ.get("MOCS_PATH", "")) if os.environ.get("MOCS_PATH") else None
 OUTPUT_PATH = Path(os.environ.get("OUTPUT_PATH", "")) if os.environ.get("OUTPUT_PATH") else None
+ATTACHMENTS_PATH = Path(os.environ.get("ATTACHMENTS_PATH", "")) if os.environ.get("ATTACHMENTS_PATH") else None
 TAGGING_NOTE_PATH = Path(os.environ["TAGGING_NOTE_PATH"]) if os.environ.get("TAGGING_NOTE_PATH") else None
 
 # Detected frontmatter conventions
@@ -183,12 +189,12 @@ def main():
             roles[role] = folder
 
     console.print("\n[bold]Detected folder roles:[/bold]")
-    for role in ["inbox", "daily", "mocs", "output"]:
+    for role in ["inbox", "daily", "mocs", "output", "attachments"]:
         detected = roles.get(role)
         console.print(f"  {role}: {detected.name if detected else '[not detected]'}")
 
     # Allow overrides
-    for role in ["inbox", "daily", "mocs", "output"]:
+    for role in ["inbox", "daily", "mocs", "output", "attachments"]:
         current = roles.get(role)
         prompt_msg = f"Folder for '{role}' (leave blank to skip)"
         default_val = current.name if current else ""
@@ -228,6 +234,7 @@ def main():
         daily_path=roles.get("daily"),
         mocs_path=roles.get("mocs"),
         output_path=roles.get("output"),
+        attachments_path=roles.get("attachments"),
         tagging_note_path=tagging_note,
         api_key=api_key,
         tag_format=tag_format,
@@ -252,6 +259,7 @@ def main():
     table.add_row("Daily notes", str(roles.get("daily", "not set")))
     table.add_row("MOCs", str(roles.get("mocs", "not set")))
     table.add_row("Output", str(roles.get("output", "not set")))
+    table.add_row("Attachments", str(roles.get("attachments", "not set")))
     table.add_row("Tagging note", str(tagging_note or "not found"))
     table.add_row("Tag format", tag_format)
     table.add_row("API key", "***" + api_key[-4:] if api_key else "not set")

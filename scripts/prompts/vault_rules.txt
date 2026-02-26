@@ -1,0 +1,28 @@
+## Vault Note Rules
+
+Apply these rules when generating content that will be saved as a note in an Obsidian vault. If generating content for external publishing (web article, social post, etc.), apply only the Citations & Sources rules below — skip Wikilinks and Tagging.
+
+### Wikilinks
+
+- Add [[wikilinks]] for specific people, organizations, legislation, campaigns, or topics mentioned in the content that could reasonably have their own vault note.
+- For concepts that don't have existing notes yet but are worth exploring later, add [[stub wikilinks]] and include a brief inline note about what to research (e.g., "[[Topic Name]] — worth investigating further for connection to X").
+- Do not create wikilinks for generic terms. Only link specific, notable concepts worthy of their own note.
+- Use aliases for long titles when needed: [[Full Note Title|display text]]
+
+### Citations & Sources
+
+- Include full URLs of web sources as inline links at the point where they are first referenced.
+- Add a ## Sources section at the bottom of the note listing all source URLs used.
+- Every factual claim drawn from external research should be traceable to its source.
+
+### Tagging
+
+Include tags in YAML frontmatter:
+```yaml
+tags: [content-type, location, other-relevant-tags]
+```
+
+- Start with a content-type tag: research, legislation, campaign, plan, reference, tracking, decision, index, resource, meta
+- Add location tags (greenville-sc, sc, etc.) if the content discusses specific places
+- Add purpose prefixes (strategic-, tactical-) if the content informs decisions or implementation
+- Use area- prefix only for genuinely ambiguous notes spanning multiple categories

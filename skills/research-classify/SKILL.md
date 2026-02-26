@@ -68,10 +68,12 @@ For each item in `fetched`, determine:
 - `legislation` — a bill, ordinance, or law being proposed, amended, or passed
 - `general_research` — background, analysis, journalism, organization profiles, reference material
 
-**Vault match:**
+**Vault match — check for redundancy before proposing creation:**
 Scan the full file list for notes whose filenames closely match the article's subject.
+- Search by title keywords, abbreviations (e.g., both "ALPR" and "Automatic License Plate Reader"), location, and organization name
 - Close match found → `action: "update"`, `existing_note: relative/path`
 - No match → `action: "create"`, `existing_note: null`
+- If you find an empty or near-empty stub (filename exists but minimal content), check if a fuller version exists elsewhere — flag the stub in `existing_notes_found` so the orchestrator can clean it up
 
 **Target path:**
 - For `update`: use the exact existing note path
@@ -80,10 +82,17 @@ Scan the full file list for notes whose filenames closely match the article's su
 **Relevant files:**
 Include notes that are: the matching note (if any), 1–3 closely related notes for format reference, MOC notes in the same folder area. Keep to 3–6 files maximum.
 
-**Tags and links:**
-- `suggested_tags`: 2–4 tags appropriate for this note (see vault CLAUDE.md for tagging conventions)
-- `suggested_links`: existing vault notes whose topics appear in this article, formatted as `[[Note Title]]`
-- `stub_links`: concepts, people, or organizations worth researching later that don't have notes yet
+**Tags (follow vault tagging conventions):**
+- `suggested_tags`: 2–4 tags in this order:
+  1. A content-type tag (required): `research`, `legislation`, `campaign`, `plan`, `reference`, `tracking`, `decision`, `index`, `resource`, `meta`
+  2. Location tags if the content discusses specific places: `greenville-sc`, `sc`, `us-federal`, etc.
+  3. Purpose prefixes if the content informs decisions or implementation: `strategic-*`, `tactical-*`
+  4. Topic tags as appropriate: `surveillance`, `privacy`, `policing`, etc.
+- Use `area-` prefix only for genuinely ambiguous notes spanning multiple categories
+
+**Links:**
+- `suggested_links`: existing vault notes whose topics appear in this article, formatted as `[[Note Title]]`. Scan the full file list for matches — don't just guess. Use aliases for long titles: `[[Full Note Title|display text]]`
+- `stub_links`: concepts, people, or organizations worth researching later that don't have notes yet. Only include specific, notable concepts worthy of their own note — not generic terms. These will become `[[wikilinks]]` in the note with research TODOs, not empty stub files.
 
 ## Step 4: Output
 

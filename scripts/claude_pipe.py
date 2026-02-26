@@ -45,9 +45,20 @@ def load_prompt_template(name: str, prompts_path: Path) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
-def build_message(file_content: str, prompt_template: str) -> str:
-    """Combine file content and prompt template into a single message."""
-    return f"{file_content}\n\n---\n{prompt_template}"
+def load_vault_rules(prompts_path: Path) -> str:
+    """Load vault rules from the prompts directory. Returns empty string if not found."""
+    path = prompts_path / "vault_rules.txt"
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
+def build_message(file_content: str, prompt_template: str, vault_rules: str = "") -> str:
+    """Combine file content, prompt template, and optional vault rules into a single message."""
+    msg = f"{file_content}\n\n---\n{prompt_template}"
+    if vault_rules:
+        msg += f"\n\n---\n{vault_rules}"
+    return msg
 
 
 def estimate_cost(input_tokens: int, output_tokens: int, model: str) -> float:
@@ -104,6 +115,8 @@ def main():
     parser.add_argument("--model", choices=["light", "heavy"], default="heavy",
                         help="'light' = Haiku, 'heavy' = Opus (default)")
     parser.add_argument("--dry-run", action="store_true", help="Print message without calling API")
+    parser.add_argument("--no-vault-rules", action="store_true",
+                        help="Skip appending vault rules to the prompt")
     args = parser.parse_args()
 
     startup_checks(require_api_key=True)
@@ -116,7 +129,8 @@ def main():
 
     file_content = file_path.read_text(encoding="utf-8", errors="ignore")
     prompt_template = load_prompt_template(args.prompt, config.PROMPTS_PATH)
-    message = build_message(file_content, prompt_template)
+    vault_rules = "" if args.no_vault_rules else load_vault_rules(config.PROMPTS_PATH)
+    message = build_message(file_content, prompt_template, vault_rules=vault_rules)
 
     if args.dry_run:
         console.print(f"[yellow]Dry run — message length: {len(message)} chars[/yellow]")

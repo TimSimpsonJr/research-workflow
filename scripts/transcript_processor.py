@@ -19,7 +19,7 @@ from pathlib import Path
 from rich.console import Console
 
 import config
-from claude_pipe import call_claude, estimate_cost, load_prompt_template
+from claude_pipe import call_claude, estimate_cost, load_prompt_template, load_vault_rules
 from utils import slugify, startup_checks
 
 console = Console()
@@ -88,7 +88,10 @@ def main():
     clean_content = strip_vtt(raw_content) if fmt == "vtt" else raw_content
 
     prompt = load_prompt_template("extract_transcript", config.PROMPTS_PATH)
+    vault_rules = load_vault_rules(config.PROMPTS_PATH)
     message = f"{clean_content}\n\n---\n{prompt}"
+    if vault_rules:
+        message += f"\n\n---\n{vault_rules}"
 
     now = datetime.now(timezone.utc)
     date_str = now.strftime(config.DATE_FORMAT)

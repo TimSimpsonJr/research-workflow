@@ -21,7 +21,7 @@ from rich.console import Console
 from rich.table import Table
 
 import config
-from claude_pipe import call_claude, estimate_cost
+from claude_pipe import call_claude, estimate_cost, load_vault_rules
 from utils import slugify, startup_checks
 
 console = Console()
@@ -95,7 +95,10 @@ def main():
         format_prompt += f"\n\nAdditional context for this output: {args.context}"
 
     content = file_path.read_text(encoding="utf-8", errors="ignore")
+    vault_rules = load_vault_rules(config.PROMPTS_PATH)
     message = f"{content}\n\n---\n{format_prompt}"
+    if vault_rules:
+        message += f"\n\n---\n{vault_rules}"
 
     if args.dry_run:
         console.print(f"[yellow]Dry run — {len(message)} chars, format: {args.fmt}[/yellow]")

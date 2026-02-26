@@ -23,7 +23,7 @@ from rich.console import Console
 from rich.prompt import Confirm
 
 import config
-from claude_pipe import call_claude, estimate_cost, load_prompt_template
+from claude_pipe import call_claude, estimate_cost, load_prompt_template, load_vault_rules
 from utils import startup_checks
 
 console = Console()
@@ -162,7 +162,10 @@ def main():
             sys.exit(0)
 
     prompt = load_prompt_template("synthesize_topic", config.PROMPTS_PATH)
+    vault_rules = load_vault_rules(config.PROMPTS_PATH)
     message = f"{context}\n\n---\n{prompt}"
+    if vault_rules:
+        message += f"\n\n---\n{vault_rules}"
 
     if args.dry_run:
         console.print(f"[yellow]Dry run — {len(message)} chars, would send to Claude[/yellow]")
