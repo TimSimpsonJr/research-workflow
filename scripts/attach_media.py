@@ -25,6 +25,7 @@ Dependencies: requests, rich, python-dotenv
 """
 
 import argparse
+import os
 import re
 import sys
 from datetime import datetime, timezone
@@ -310,11 +311,19 @@ def main():
         console.print(f"[red]Note not found: {args.note}[/red]")
         sys.exit(1)
 
+    # Security: validate note path is inside the vault
+    vault_root = config.VAULT_PATH
+    note_resolved = note_path.resolve()
+    vault_resolved = vault_root.resolve()
+    if not str(note_resolved).startswith(str(vault_resolved) + os.sep) and note_resolved != vault_resolved:
+        console.print(f"[red]Error: Note must be inside the vault: {vault_resolved}[/red]")
+        console.print(f"[red]Got: {note_resolved}[/red]")
+        sys.exit(1)
+
     # Determine attachments directory
     attachments_dir = getattr(config, "ATTACHMENTS_PATH", None)
     if not attachments_dir:
         attachments_dir = config.VAULT_PATH / "Attachments"
-    vault_root = config.VAULT_PATH
 
     if args.file:
         attach_file(note_path, Path(args.file), attachments_dir, vault_root, args.dry_run)

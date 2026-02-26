@@ -72,10 +72,12 @@ def test_format_citations_frontmatter():
     }]
     result = format_citations_frontmatter(citations)
     assert "media_assets:" in result
-    assert "source_url: https://example.com/img.png" in result
+    # source_url now gets YAML-safe quoting (contains ://)
+    assert "source_url:" in result
+    assert "https://example.com/img.png" in result
     assert "local_path: Attachments/slug/img.png" in result
     assert "media_type: image" in result
-    assert 'title: "Test Image"' in result
+    assert "title: Test Image" in result
 
 
 # ──────────────────────────────────────────────
@@ -205,12 +207,22 @@ def test_safe_filename_strips_query():
     assert name == "img.jpg"
 
 
+def _mock_media_response(data=b"fake image data", content_type="image/jpeg", content_length=None):
+    """Create a mock requests.Response suitable for the redirect-safe fetch."""
+    mock_response = MagicMock()
+    mock_response.is_redirect = False
+    mock_response.headers = {
+        "Content-Type": content_type,
+        "Content-Length": str(content_length or len(data)),
+    }
+    mock_response.iter_content.return_value = [data]
+    mock_response.raise_for_status = MagicMock()
+    return mock_response
+
+
 def test_download_media_success(tmp_path):
     from media_handler import download_media
-    mock_response = MagicMock()
-    mock_response.headers = {"Content-Length": "100"}
-    mock_response.iter_content.return_value = [b"fake image data"]
-    mock_response.raise_for_status = MagicMock()
+    mock_response = _mock_media_response(b"fake image data")
 
     with patch("media_handler.requests.get", return_value=mock_response), \
          patch("media_handler._validate_media_url"):
@@ -225,9 +237,7 @@ def test_download_media_success(tmp_path):
 
 def test_download_media_too_large(tmp_path):
     from media_handler import download_media
-    mock_response = MagicMock()
-    mock_response.headers = {"Content-Length": str(100 * 1024 * 1024)}
-    mock_response.raise_for_status = MagicMock()
+    mock_response = _mock_media_response(content_length=100 * 1024 * 1024)
 
     with patch("media_handler.requests.get", return_value=mock_response), \
          patch("media_handler._validate_media_url"):
@@ -313,7 +323,7 @@ def test_inject_citations_into_frontmatter():
     }]
     result = inject_citations_into_frontmatter(fm, citations)
     assert "media_assets:" in result
-    assert "source_url: https://example.com/img.png" in result
+    assert "https://example.com/img.png" in result
     assert result.strip().endswith("---")
 
 
@@ -460,10 +470,7 @@ def test_extract_and_download_with_images(tmp_path):
 
     md = "# Article\n\n![photo](https://example.com/photo.jpg)\n\nMore text."
 
-    mock_response = MagicMock()
-    mock_response.headers = {"Content-Length": "100"}
-    mock_response.iter_content.return_value = [b"fake jpg"]
-    mock_response.raise_for_status = MagicMock()
+    mock_response = _mock_media_response(b"fake jpg")
 
     with patch("media_handler.requests.get", return_value=mock_response), \
          patch("media_handler._validate_media_url"):
@@ -579,3 +586,129 @@ def test_generate_env_includes_attachments():
         frontmatter_fields=["title", "source"],
     )
     assert "ATTACHMENTS_PATH=/vault/Attachments" in env
+
+
+# ──────────────────────────────────────────────
+# Security tests
+# ──────────────────────────────────────────────
+
+def test_yaml_safe_strips_newlines():
+    from media_handler import _yaml_safe
+    # Newlines could inject extra YAML keys
+    result = _yaml_safe("evil\ninjected: true")
+    assert "\n" not in result
+    assert "injected" in result  # Content preserved but neutered
+
+
+def test_yaml_safe_quotes_colons():
+    from media_handler import _yaml_safe
+    result = _yaml_safe("https://example.com")
+    assert result.startswith('"')
+    assert result.endswith('"')
+
+
+def test_yaml_safe_escapes_quotes():
+    from media_handler import _yaml_safe
+    result = _yaml_safe('value with "quotes"')
+    assert '\\"' in result
+
+
+def test_yaml_safe_plain_value():
+    from media_handler import _yaml_safe
+    result = _yaml_safe("simple")
+    assert result == "simple"  # No quoting needed
+
+
+def test_path_traversal_blocked_in_download(tmp_path):
+    """Path traversal filenames are stripped to basename, staying within dest_dir."""
+    from media_handler import download_media
+    mock_response = _mock_media_response(b"malicious")
+    dest_dir = tmp_path / "attachments"
+
+    with patch("media_handler.requests.get", return_value=mock_response), \
+         patch("media_handler._validate_media_url"):
+        path, _ = download_media(
+            "https://evil.com/payload",
+            dest_dir,
+            filename="../../etc/cron.d/evil",
+        )
+    # File should be written inside dest_dir, not escaped
+    assert str(path.resolve()).startswith(str(dest_dir.resolve()))
+    assert path.name == "evil"
+
+
+def test_path_traversal_blocked_in_copy(tmp_path):
+    """Path traversal filenames are stripped to basename, staying within dest_dir."""
+    from media_handler import copy_local_media
+    source = tmp_path / "file.txt"
+    source.write_text("content")
+    dest_dir = tmp_path / "dest"
+
+    path, _ = copy_local_media(source, dest_dir, filename="../../escape.txt")
+    # File should be written inside dest_dir, not escaped
+    assert str(path.resolve()).startswith(str(dest_dir.resolve()))
+    assert path.name == "escape.txt"
+
+
+def test_safe_dest_path_strips_directory():
+    from media_handler import _safe_dest_path
+    # filename with directory components should be stripped to basename
+    result = _safe_dest_path(Path("/vault/Attachments/slug"), "subdir/file.png")
+    assert result.name == "file.png"
+    assert "subdir" not in str(result)
+
+
+def test_content_type_blocked(tmp_path):
+    from media_handler import download_media
+    # Serve HTML disguised as an image
+    mock_response = _mock_media_response(
+        b"<html><script>alert(1)</script></html>",
+        content_type="text/html",
+    )
+
+    with patch("media_handler.requests.get", return_value=mock_response), \
+         patch("media_handler._validate_media_url"):
+        with pytest.raises(RuntimeError, match="Blocked Content-Type"):
+            download_media("https://evil.com/fake.jpg", tmp_path)
+
+
+def test_redirect_ssrf_validation():
+    """Verify that redirect targets are SSRF-validated."""
+    from media_handler import _fetch_with_ssrf_safe_redirects
+
+    # First response: redirect to internal IP
+    redirect_response = MagicMock()
+    redirect_response.is_redirect = True
+    redirect_response.headers = {"Location": "http://169.254.169.254/latest/meta-data/"}
+
+    with patch("media_handler.requests.get", return_value=redirect_response):
+        with pytest.raises(ValueError, match="Blocked"):
+            _fetch_with_ssrf_safe_redirects("https://evil.com/image.png")
+
+
+def test_svg_not_in_image_extensions():
+    """SVG should not be in IMAGE_EXTENSIONS due to XSS risk."""
+    from media_handler import IMAGE_EXTENSIONS
+    assert ".svg" not in IMAGE_EXTENSIONS
+
+
+def test_yaml_injection_in_author_blocked():
+    """Verify YAML injection via author field is neutralized."""
+    from media_handler import format_citations_frontmatter
+    citations = [{
+        "source_url": "https://example.com/img.png",
+        "local_path": "Attachments/slug/img.png",
+        "media_type": "image",
+        "accessed_at": "2026-02-26T12:00:00+00:00",
+        "title": "Photo",
+        "author": "evil\nmalicious_key: injected",
+    }]
+    result = format_citations_frontmatter(citations)
+    # The newline should be stripped, preventing YAML injection
+    assert "malicious_key:" not in result.split("\n    author:")[0]
+    # The value should be on a single line
+    for line in result.splitlines():
+        if "author:" in line:
+            assert "evil" in line
+            assert "malicious_key" in line  # present but on same line, quoted
+            break

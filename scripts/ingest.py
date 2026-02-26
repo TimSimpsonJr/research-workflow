@@ -55,12 +55,13 @@ def build_frontmatter(
                        if field and field not in {"title", "source", "fetched_at", "tags"})
     extras_block = f"\n{extras}" if extras else ""
 
-    # Quote title to handle colons, hashes, or other YAML special characters
-    safe_title = title.replace('"', '\\"')
+    # Quote title and source to handle colons, hashes, newlines, or other YAML special characters
+    safe_title = title.replace("\n", " ").replace("\r", " ").replace('"', '\\"')
+    safe_source = source.replace("\n", "").replace("\r", "").replace('"', '\\"')
     return (
         f"---\n"
         f'title: "{safe_title}"\n'
-        f"source: {source}\n"
+        f'source: "{safe_source}"\n'
         f"fetched_at: {fetched_at}\n"
         f"{tags_line}{extras_block}\n"
         f"---\n\n"

@@ -47,7 +47,11 @@ console = Console()
 # Constants
 # ──────────────────────────────────────────────
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".svg", ".webp", ".bmp", ".ico"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico"}
+# SVG intentionally excluded — SVG files can contain embedded <script> tags
+# and event handlers (XSS risk). If SVG support is needed later, add
+# sanitization to strip active content before saving.
+SVG_EXTENSIONS = {".svg"}  # tracked separately for future opt-in
 VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".avi", ".mkv"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"}
 ALL_MEDIA_EXTENSIONS = IMAGE_EXTENSIONS | VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
@@ -73,6 +77,62 @@ MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024
 
 # Download timeout in seconds
 DOWNLOAD_TIMEOUT = 30
+
+
+# Allowed Content-Type prefixes for downloaded media
+ALLOWED_CONTENT_TYPES = {
+    "image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp",
+    "image/x-icon", "image/vnd.microsoft.icon",
+    "video/mp4", "video/webm", "video/quicktime",
+    "audio/mpeg", "audio/wav", "audio/ogg", "audio/flac", "audio/aac",
+    "audio/mp4", "audio/x-m4a",
+    "application/octet-stream",  # generic binary — allow but log
+}
+
+# Maximum number of HTTP redirects to follow
+MAX_REDIRECTS = 5
+
+
+# ──────────────────────────────────────────────
+# YAML safety
+# ──────────────────────────────────────────────
+
+def _yaml_safe(value: str) -> str:
+    """Escape a string for safe inclusion in hand-built YAML.
+
+    Strips newlines/carriage returns (which could inject YAML keys),
+    escapes backslashes and double quotes, and wraps in double quotes
+    if the value contains any YAML metacharacters.
+    """
+    # Strip characters that could inject new YAML lines
+    value = value.replace("\r", "").replace("\n", " ")
+    # Check if quoting is needed
+    needs_quoting = any(c in value for c in (':', '#', '"', "'", '[', ']', '{', '}', ',', '&', '*', '!', '|', '>', '%', '@', '`'))
+    if needs_quoting or not value:
+        escaped = value.replace('\\', '\\\\').replace('"', '\\"')
+        return f'"{escaped}"'
+    return value
+
+
+# ──────────────────────────────────────────────
+# Path safety
+# ──────────────────────────────────────────────
+
+def _safe_dest_path(dest_dir: Path, filename: str) -> Path:
+    """Resolve a destination path and verify it stays within dest_dir.
+
+    Strips directory components from filename and validates the resolved
+    path to prevent path traversal attacks.
+    """
+    # Strip any directory components — only keep the basename
+    filename = Path(filename).name
+    if not filename:
+        filename = "download.bin"
+    dest_path = (dest_dir / filename).resolve()
+    dest_dir_resolved = dest_dir.resolve()
+    if not str(dest_path).startswith(str(dest_dir_resolved) + os.sep) and dest_path != dest_dir_resolved:
+        raise ValueError(f"Path traversal detected in filename: {filename}")
+    return dest_path
 
 
 # ──────────────────────────────────────────────
@@ -124,16 +184,15 @@ def format_citations_frontmatter(citations: list[dict]) -> str:
         return ""
     lines = ["media_assets:"]
     for c in citations:
-        lines.append(f"  - source_url: {c['source_url']}")
+        lines.append(f"  - source_url: {_yaml_safe(c['source_url'])}")
         if c.get("local_path"):
-            lines.append(f"    local_path: {c['local_path']}")
-        lines.append(f"    media_type: {c['media_type']}")
-        lines.append(f"    accessed_at: {c['accessed_at']}")
+            lines.append(f"    local_path: {_yaml_safe(c['local_path'])}")
+        lines.append(f"    media_type: {_yaml_safe(c['media_type'])}")
+        lines.append(f"    accessed_at: {_yaml_safe(c['accessed_at'])}")
         if c.get("title"):
-            safe_title = c["title"].replace('"', '\\"')
-            lines.append(f'    title: "{safe_title}"')
+            lines.append(f"    title: {_yaml_safe(c['title'])}")
         if c.get("author"):
-            lines.append(f"    author: {c['author']}")
+            lines.append(f"    author: {_yaml_safe(c['author'])}")
     return "\n".join(lines)
 
 
@@ -204,7 +263,12 @@ def _is_downloadable_url(url: str) -> bool:
 # ──────────────────────────────────────────────
 
 def _validate_media_url(url: str) -> None:
-    """Reject URLs targeting private/internal networks."""
+    """Reject URLs targeting private/internal networks.
+
+    Checks scheme, hostname blocklist, IP literal ranges, and DNS-resolved IPs.
+    Blocks private, loopback, reserved, and link-local addresses (including
+    cloud metadata endpoints like 169.254.169.254).
+    """
     # Import SSRF check from fetch_and_clean if available, else inline
     try:
         from fetch_and_clean import validate_url
@@ -221,8 +285,8 @@ def _validate_media_url(url: str) -> None:
             raise ValueError(f"Blocked hostname '{hostname}': {url}")
         try:
             addr = ip_address(hostname)
-            if addr.is_private or addr.is_loopback or addr.is_reserved:
-                raise ValueError(f"Blocked private IP '{hostname}': {url}")
+            if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                raise ValueError(f"Blocked private/link-local IP '{hostname}': {url}")
         except ValueError as orig:
             if "Blocked" in str(orig):
                 raise
@@ -230,8 +294,8 @@ def _validate_media_url(url: str) -> None:
                 resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
                 for _fam, _type, _proto, _canon, sockaddr in resolved:
                     addr = ip_address(sockaddr[0])
-                    if addr.is_private or addr.is_loopback or addr.is_reserved:
-                        raise ValueError(f"Blocked: '{hostname}' resolves to private IP {addr}")
+                    if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_link_local:
+                        raise ValueError(f"Blocked: '{hostname}' resolves to private/link-local IP {addr}")
             except socket.gaierror:
                 pass
 
@@ -264,6 +328,37 @@ def _safe_filename(url: str, content: bytes | None = None) -> str:
     return basename
 
 
+def _fetch_with_ssrf_safe_redirects(
+    url: str,
+    timeout: int = DOWNLOAD_TIMEOUT,
+    max_redirects: int = MAX_REDIRECTS,
+) -> requests.Response:
+    """Fetch a URL, manually following redirects with SSRF validation at each hop.
+
+    Disables automatic redirect following so every redirect target is validated
+    against private/internal IP ranges before the request proceeds.
+    """
+    _validate_media_url(url)
+    current_url = url
+    for _ in range(max_redirects):
+        response = requests.get(
+            current_url, timeout=timeout, stream=True, allow_redirects=False,
+        )
+        if response.is_redirect:
+            redirect_url = response.headers.get("Location", "")
+            if not redirect_url:
+                raise RuntimeError(f"Redirect with no Location header from {current_url}")
+            # Resolve relative redirects
+            if not urlparse(redirect_url).scheme:
+                redirect_url = urljoin(current_url, redirect_url)
+            _validate_media_url(redirect_url)  # SSRF check on redirect target
+            current_url = redirect_url
+            continue
+        response.raise_for_status()
+        return response
+    raise RuntimeError(f"Too many redirects ({max_redirects}) for {url}")
+
+
 def download_media(
     url: str,
     dest_dir: Path,
@@ -273,12 +368,24 @@ def download_media(
 
     Returns (local_path, file_size_bytes).
     Raises ValueError for SSRF, RuntimeError for download failures.
+
+    Security:
+    - SSRF validation on initial URL and every redirect hop
+    - Content-Type validation against allowed media types
+    - 50 MB size limit
+    - Path traversal protection on filename
     """
-    _validate_media_url(url)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
-    response = requests.get(url, timeout=DOWNLOAD_TIMEOUT, stream=True)
-    response.raise_for_status()
+    response = _fetch_with_ssrf_safe_redirects(url)
+
+    # Validate Content-Type — reject non-media responses
+    content_type = response.headers.get("Content-Type", "").split(";")[0].strip().lower()
+    if content_type and content_type not in ALLOWED_CONTENT_TYPES:
+        raise RuntimeError(
+            f"Blocked Content-Type '{content_type}' for {url} "
+            f"(expected media type)"
+        )
 
     # Check content length before downloading
     content_length = response.headers.get("Content-Length")
@@ -298,7 +405,8 @@ def download_media(
     if not filename:
         filename = _safe_filename(url, data)
 
-    dest_path = dest_dir / filename
+    # Path traversal protection
+    dest_path = _safe_dest_path(dest_dir, filename)
     dest_path.write_bytes(data)
     return dest_path, len(data)
 
@@ -311,6 +419,8 @@ def copy_local_media(
     """Copy a local media file to dest_dir.
 
     Returns (local_path, file_size_bytes).
+
+    Security: filename is sanitized to prevent path traversal.
     """
     if not source_path.exists():
         raise FileNotFoundError(f"Source file not found: {source_path}")
@@ -319,7 +429,8 @@ def copy_local_media(
     if not filename:
         filename = source_path.name
 
-    dest_path = dest_dir / filename
+    # Path traversal protection
+    dest_path = _safe_dest_path(dest_dir, filename)
     if dest_path.resolve() != source_path.resolve():
         shutil.copy2(source_path, dest_path)
 
