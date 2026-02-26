@@ -341,3 +341,211 @@ It already does exactly this: collect .md files in a folder, send to Claude, wri
 
 **Why whisper is not in requirements.txt?**
 Adding `openai-whisper` pulls in PyTorch (~2GB). Most users won't need audio transcription. Checking for the `whisper` CLI at runtime and giving a clear skip message is the right trade-off.
+
+---
+
+# Addendum: Media Handling & Citation Tracking
+
+## Overview
+
+Add end-to-end media handling to the research workflow: auto-extract embedded media during ingestion, manual attachment of media to notes, structured citation tracking for all media assets. All media files are copied to the vault's `Attachments/` folder with source URLs preserved for publishing citations.
+
+## Requirements
+
+1. **Auto-extract** embedded images, YouTube videos, and audio from ingested content
+2. **Manual attachment** of local or web media to existing notes via CLI
+3. **Local copies** of all media in the vault `Attachments/` folder, organized by source slug
+4. **Source URLs** preserved alongside every media asset for citation
+5. **Structured citations** in both frontmatter (`media_assets:` YAML block) and inline (`## Sources` section)
+6. **Metadata extraction** (no AI vision): YouTube thumbnails + transcripts via yt-dlp, Whisper for audio
+7. **All media types**: images (static), diagrams/charts, video, audio
+
+## Architecture
+
+```
+Web ingestion (ingest.py):
+  URL → Jina Reader → markdown
+    → media_handler.extract_and_download_media()
+      → download images to Attachments/{slug}/
+      → rewrite markdown refs to ![[Attachments/slug/img.png]]
+      → collect citation metadata
+    → inject citations into frontmatter + ## Sources section
+    → write note
+
+Manual attachment (attach_media.py):
+  --file path/to/image.png → copy_local_media() → update note
+  --url https://example.com/img.png → download_media() → update note
+  --youtube https://youtube.com/watch?v=ID → process_youtube() → update note
+  --audio path/to/recording.mp3 → process_audio() → update note
+
+Local ingestion (/ingest-local, future):
+  parse_local.py → content_results.json
+    → media_handler.extract_and_download_media() in skill orchestrator
+    → same citation pipeline
+```
+
+## New Files
+
+### `scripts/media_handler.py` — Core media library
+
+All media extraction, download, and citation logic lives here. No Claude API calls.
+
+**Key functions:**
+
+| Function | Purpose |
+|----------|---------|
+| `extract_image_urls(markdown)` | Find `![](url)` and `<img>` tags in markdown |
+| `extract_youtube_urls(markdown)` | Find YouTube URLs in markdown |
+| `download_media(url, dest_dir)` | Download with SSRF protection, size limits |
+| `copy_local_media(source, dest_dir)` | Copy local file to attachments |
+| `rewrite_markdown_images(md, downloaded, vault_root)` | Replace URLs with `![[]]` embeds |
+| `extract_and_download_media(md, ...)` | **Main entry point** — full extraction pipeline |
+| `build_citation(...)` | Build structured citation dict |
+| `format_citations_frontmatter(citations)` | YAML `media_assets:` block |
+| `inject_citations_into_frontmatter(fm, citations)` | Insert into existing frontmatter |
+| `append_sources_section(md, citations)` | Add/append `## Sources` with links |
+| `fetch_youtube_metadata(url)` | yt-dlp JSON metadata |
+| `fetch_youtube_transcript(url)` | yt-dlp auto-sub → stripped VTT |
+| `process_youtube(url, attachments_dir, slug)` | Full YouTube pipeline |
+| `process_audio(source, attachments_dir, slug)` | Copy + optional Whisper transcription |
+
+**Security:** Reuses `validate_url()` from `fetch_and_clean.py` for SSRF protection on all downloads. 50 MB size limit per file.
+
+**CLI interface:**
+```bash
+python media_handler.py extract content.md --attachments-dir /vault/Attachments --vault-root /vault --slug article-name
+python media_handler.py download "https://example.com/img.png" --attachments-dir /vault/Attachments --slug name
+python media_handler.py youtube "https://youtube.com/watch?v=ID" --attachments-dir /vault/Attachments --slug name
+```
+
+### `scripts/attach_media.py` — Manual attachment CLI
+
+Attaches media to an existing vault note. Handles the note update (embed + citation).
+
+**CLI interface:**
+```bash
+python attach_media.py "path/to/note.md" --file "local/image.png"
+python attach_media.py "path/to/note.md" --url "https://example.com/image.png"
+python attach_media.py "path/to/note.md" --youtube "https://youtube.com/watch?v=ID"
+python attach_media.py "path/to/note.md" --audio "local/recording.mp3"
+```
+
+Each command:
+1. Downloads/copies media to `Attachments/{note-slug}/`
+2. Adds `![[Attachments/slug/file.ext]]` embed to note body
+3. Adds citation to frontmatter `media_assets:` block
+4. Appends source link to `## Sources` section
+
+### `tests/test_media_handler.py` — 47 tests
+
+Covers: citation building, URL extraction, deduplication, download mocking, markdown rewriting, frontmatter injection, sources section, YouTube metadata, audio processing, attach_media helpers, vault discovery attachments detection.
+
+## Modified Files
+
+### `scripts/ingest.py`
+
+- Added `extract_media` parameter to `ingest_url()` (default: `True`)
+- After fetching content, calls `media_handler.extract_and_download_media()`
+- Injects citations into frontmatter and appends `## Sources` section
+- Added `--no-media` CLI flag to skip media extraction
+- Import is lazy (inside function) so missing `media_handler.py` doesn't break anything
+
+### `scripts/discover_vault.py`
+
+- Added `ATTACHMENTS_PATTERNS` for auto-detecting attachments folders
+- Added `"attachments"` role to `categorize_folder()`
+- `generate_env_content()` accepts and writes `ATTACHMENTS_PATH`
+- Setup wizard now asks for attachments folder override
+- Summary table includes attachments row
+
+### `scripts/config.py` template (via `discover_vault.py`)
+
+Added:
+```python
+ATTACHMENTS_PATH = Path(os.environ.get("ATTACHMENTS_PATH", "")) if os.environ.get("ATTACHMENTS_PATH") else None
+```
+
+## Citation Format
+
+### Frontmatter (structured)
+
+```yaml
+---
+title: "Article Title"
+source: https://example.com/article
+fetched_at: 2026-02-26T12:00:00+00:00
+tags:
+  - inbox
+  - unprocessed
+media_assets:
+  - source_url: https://example.com/chart.png
+    local_path: Attachments/article-slug/abc123-chart.png
+    media_type: image
+    accessed_at: 2026-02-26T12:00:00+00:00
+    title: "Revenue Chart"
+  - source_url: https://www.youtube.com/watch?v=abc123
+    local_path: Attachments/article-slug/abc123-thumbnail.jpg
+    media_type: video
+    accessed_at: 2026-02-26T12:00:00+00:00
+    title: "Interview with Expert"
+    author: Channel Name
+---
+```
+
+### Inline (in note body)
+
+```markdown
+![[Attachments/article-slug/abc123-chart.png]]
+
+## Sources
+
+- [Revenue Chart](https://example.com/chart.png) (accessed 2026-02-26)
+- [Interview with Expert](https://www.youtube.com/watch?v=abc123) (accessed 2026-02-26)
+```
+
+## Vault Attachments Organization
+
+```
+Vault/
+├── Attachments/
+│   ├── article-slug/
+│   │   ├── abc123-chart.png
+│   │   ├── def456-photo.jpg
+│   │   └── video-id-thumbnail.jpg
+│   └── another-article/
+│       └── ghi789-diagram.svg
+├── Inbox/
+│   └── 2026-02-26-article-slug.md    (references Attachments/article-slug/*)
+└── ...
+```
+
+Each ingested article gets its own subdirectory. Files are named with a content hash prefix for uniqueness.
+
+## Runtime Dependencies
+
+| Tool | Required? | Used for |
+|------|-----------|----------|
+| `yt-dlp` | Optional | YouTube metadata, thumbnails, transcripts |
+| `whisper` | Optional | Audio transcription |
+
+Both are checked at runtime via `shutil.which()`. Missing tools produce warnings, not errors.
+
+## Design Decisions
+
+**Why copy media into vault instead of linking?**
+The user needs offline access and citation stability. Web URLs break. Local copies in the vault survive link rot and work without internet.
+
+**Why keep source URLs alongside copies?**
+Publishing citations. Every media asset carries provenance for later attribution.
+
+**Why no AI vision for images?**
+Cost control. The metadata-only approach (yt-dlp, whisper) uses free tools. Vision descriptions can be added later as an opt-in enhancement.
+
+**Why organize by slug subdirectory?**
+Prevents filename collisions across articles. Keeps related assets grouped. Easy to clean up if a note is deleted.
+
+**Why lazy import of media_handler in ingest.py?**
+Graceful degradation. If media_handler.py or its dependencies aren't available, ingestion still works — it just skips media extraction.
+
+**Why `--no-media` flag instead of separate command?**
+Media extraction is the default you want. Opting out should be the exception (e.g., quick ingestion, bandwidth constraints).

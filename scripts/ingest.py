@@ -2,10 +2,13 @@
 ingest.py — URL to Vault Inbox
 
 Purpose: Fetch a URL via Jina Reader, write a clean markdown note to the vault inbox.
+Optionally extracts embedded media (images, YouTube) and downloads them to the vault
+attachments folder with citation tracking.
 
 Usage:
     python ingest.py "https://example.com/article"
     python ingest.py "https://example.com/article" --dry-run
+    python ingest.py "https://example.com/article" --no-media
 
 Dependencies: requests, rich, python-dotenv
 """
@@ -89,8 +92,15 @@ def fetch_url(url: str) -> str:
     return response.text
 
 
-def ingest_url(url: str, dry_run: bool = False) -> Path | None:
-    """Core ingestion logic. Returns output path or None on dry run."""
+def ingest_url(url: str, dry_run: bool = False, extract_media: bool = True) -> Path | None:
+    """Core ingestion logic. Returns output path or None on dry run.
+
+    Args:
+        url: URL to fetch.
+        dry_run: Preview without writing.
+        extract_media: If True, download embedded images and process YouTube
+            URLs found in the content. Saves media to vault attachments folder.
+    """
     console.print(f"Fetching: {url}")
     with console.status("Fetching via Jina Reader..."):
         content = fetch_url(url)
@@ -101,6 +111,27 @@ def ingest_url(url: str, dry_run: bool = False) -> Path | None:
     date_str = now.strftime(config.DATE_FORMAT)
     fetched_at = now.isoformat()
 
+    # Media extraction: download embedded images, process YouTube URLs
+    citations = []
+    if extract_media and not dry_run:
+        try:
+            from media_handler import extract_and_download_media
+            attachments_dir = getattr(config, "ATTACHMENTS_PATH", None)
+            if not attachments_dir:
+                attachments_dir = config.VAULT_PATH / "Attachments"
+            with console.status("Extracting embedded media..."):
+                content, citations = extract_and_download_media(
+                    markdown=content,
+                    attachments_dir=attachments_dir,
+                    slug=slug,
+                    vault_root=config.VAULT_PATH,
+                    source_url=url,
+                )
+            if citations:
+                console.print(f"[green]Extracted {len(citations)} media asset(s)[/green]")
+        except ImportError:
+            pass  # media_handler not available, skip
+
     frontmatter = build_frontmatter(
         title=title,
         source=url,
@@ -108,6 +139,13 @@ def ingest_url(url: str, dry_run: bool = False) -> Path | None:
         tag_format=config.TAG_FORMAT,
         extra_fields=config.FRONTMATTER_FIELDS,
     )
+
+    # Inject citation metadata into frontmatter if we have any
+    if citations:
+        from media_handler import inject_citations_into_frontmatter, append_sources_section
+        frontmatter = inject_citations_into_frontmatter(frontmatter, citations)
+        content = append_sources_section(content, citations)
+
     full_content = frontmatter + content
 
     if dry_run:
@@ -129,10 +167,12 @@ def main():
     parser = argparse.ArgumentParser(description="Fetch a URL and save to vault inbox.")
     parser.add_argument("url", help="URL to fetch")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--no-media", action="store_true",
+                        help="Skip media extraction (images, YouTube)")
     args = parser.parse_args()
 
     startup_checks(require_api_key=True, ensure_inbox=True)
-    ingest_url(args.url, dry_run=args.dry_run)
+    ingest_url(args.url, dry_run=args.dry_run, extract_media=not args.no_media)
 
 
 if __name__ == "__main__":
