@@ -17,6 +17,7 @@ from rich.console import Console
 from rich.table import Table
 
 import config
+from utils import startup_checks
 
 console = Console()
 
@@ -55,12 +56,6 @@ def find_broken_links(vault_path: Path) -> list[dict]:
             if normalize_link(link) not in index:
                 broken.append({"file": md, "link": link})
     return broken
-
-
-def startup_checks():
-    if not config.VAULT_PATH.exists():
-        console.print(f"[red]VAULT_PATH does not exist: {config.VAULT_PATH}[/red]")
-        sys.exit(1)
 
 
 def main():

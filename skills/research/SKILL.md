@@ -28,7 +28,7 @@ You orchestrate research into the vault using a 3-tier pipeline:
 4. **Sonnet write** — you synthesize and write the final notes
 
 Vault root: `{{VAULT_ROOT}}`  <!-- Set to your Obsidian vault path -->
-Scripts dir: `{{SCRIPTS_DIR}}`  <!-- Set to the research-workflow project path -->
+Scripts dir: `{{SCRIPTS_DIR}}`  <!-- Set to the research-workflow repo root (Python scripts are in scripts/ subfolder) -->
 Python: `{{PYTHON_PATH}}`  <!-- Set to your Python 3.12+ executable path -->
 
 ---
@@ -103,7 +103,7 @@ Write the `search_context` JSON to a temporary file using the Write tool:
 
 Run the fetch script using Bash:
 ```bash
-"{{PYTHON_PATH}}" "{{SCRIPTS_DIR}}/fetch_and_clean.py" --input "{{SCRIPTS_DIR}}/.tmp/search_context.json" --output "{{SCRIPTS_DIR}}/.tmp/fetch_results.json"
+"{{PYTHON_PATH}}" "{{SCRIPTS_DIR}}/scripts/fetch_and_clean.py" --input "{{SCRIPTS_DIR}}/.tmp/search_context.json" --output "{{SCRIPTS_DIR}}/.tmp/fetch_results.json"
 ```
 
 Wait for it to complete. If it exits with a non-zero code, output the stderr and stop.

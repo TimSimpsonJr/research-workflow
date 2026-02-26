@@ -5,11 +5,13 @@ __pycache__/
 .pytest_cache/
 .cache/
 repomix-output.txt
-config.py
+scripts/config.py
 .venv/
 venv/
 *.log
 Thumbs.db
 desktop.ini
 .tmp/
+.claude/
+repomix.config.json
 docs/

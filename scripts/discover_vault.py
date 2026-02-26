@@ -119,7 +119,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 import os
 
-load_dotenv()
+_PROJECT_ROOT = Path(__file__).parent.parent
+load_dotenv(_PROJECT_ROOT / ".env")
 
 # Vault paths — populated by discover_vault.py
 VAULT_PATH = Path(os.environ["VAULT_PATH"])
@@ -145,6 +146,7 @@ JINA_BASE_URL = "https://r.jina.ai"
 
 # Scripts
 SCRIPTS_PATH = Path(__file__).parent
+PROJECT_ROOT = SCRIPTS_PATH.parent
 PROMPTS_PATH = SCRIPTS_PATH / "prompts"
 '''
 
@@ -232,7 +234,7 @@ def main():
         date_format="%Y-%m-%d",
         frontmatter_fields=["title", "source", "tags", "created"],
     )
-    env_path = Path(__file__).parent / ".env"
+    env_path = Path(__file__).parent.parent / ".env"
     env_path.write_text(env_content, encoding="utf-8", newline="\n")
     console.print(f"\n[green]Written:[/green] {env_path}")
 

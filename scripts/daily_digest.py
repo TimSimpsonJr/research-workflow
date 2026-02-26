@@ -20,6 +20,7 @@ from rich.console import Console
 
 import config
 from claude_pipe import call_claude, estimate_cost
+from utils import startup_checks
 
 console = Console()
 
@@ -74,15 +75,6 @@ def append_digest_section(daily_note_path: Path, digest_content: str) -> None:
     daily_note_path.write_text(updated, encoding="utf-8", newline="\n")
 
 
-def startup_checks():
-    if not config.VAULT_PATH.exists():
-        console.print(f"[red]VAULT_PATH does not exist: {config.VAULT_PATH}[/red]")
-        sys.exit(1)
-    if not config.ANTHROPIC_API_KEY:
-        console.print("[red]ANTHROPIC_API_KEY not set in .env[/red]")
-        sys.exit(1)
-
-
 def main():
     parser = argparse.ArgumentParser(description="Summarize today's vault activity to daily note.")
     parser.add_argument("--setup-scheduler", action="store_true", help="Print Windows Task Scheduler setup instructions")
@@ -94,7 +86,7 @@ def main():
         console.print(SCHEDULER_INSTRUCTIONS.format(scripts_path=scripts_path))
         return
 
-    startup_checks()
+    startup_checks(require_api_key=True)
 
     now = datetime.now(timezone.utc)
     date_str = now.strftime(config.DATE_FORMAT)

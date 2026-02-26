@@ -31,7 +31,7 @@ import requests
 # Constants
 # ──────────────────────────────────────────────
 
-DEFAULT_CACHE_DIR = Path(__file__).parent / ".cache" / "fetch"
+DEFAULT_CACHE_DIR = Path(__file__).parent.parent / ".cache" / "fetch"
 DEFAULT_TTL_DAYS = 7
 DEFAULT_FETCH_DELAY = 1.0  # seconds between fetches
 MAX_CONTENT_CHARS = 50_000

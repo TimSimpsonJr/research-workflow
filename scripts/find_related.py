@@ -22,6 +22,7 @@ from rich.table import Table
 
 import config
 from claude_pipe import call_claude, load_prompt_template
+from utils import startup_checks
 
 console = Console()
 
@@ -78,12 +79,6 @@ def search_vault_ripgrep(
             print(f"[find_related] ripgrep error for keyword '{kw}': {exc}", file=sys.stderr)
     ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     return [{"file": f, "score": s} for f, s in ranked[:top_n]]
-
-
-def startup_checks():
-    if not config.VAULT_PATH.exists():
-        console.print(f"[red]VAULT_PATH does not exist: {config.VAULT_PATH}[/red]")
-        sys.exit(1)
 
 
 def main():

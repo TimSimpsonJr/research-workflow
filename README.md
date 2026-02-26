@@ -32,45 +32,46 @@ The main feature is a 3-tier research pipeline invoked via Claude Code's `/resea
 
 ### Skills
 
-The pipeline is driven by four Claude Code skills (in `skills/`). To use them, copy or symlink them into your `~/.claude/skills/` directory:
+The pipeline is driven by three Claude Code skills (in `skills/`). To use them, copy or symlink them into your `~/.claude/skills/` directory:
 
 | Skill | Model | Role |
 |-------|-------|------|
 | `research` | Sonnet | Orchestrator — parses input, coordinates the other tiers, writes final notes |
 | `research-search` | Haiku | Tier 1 — web search and URL selection |
 | `research-classify` | Haiku | Tier 3 — vault structure mapping and article classification |
-| `research-haiku` | *(deprecated)* | Original single-agent approach, kept for reference |
 
 The orchestrator spawns the Haiku skills as subagents automatically. You only invoke `/research` directly.
 
 ## Scripts
 
+All Python scripts live in the `scripts/` directory. Run them from the repo root.
+
 ### Research Pipeline
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `fetch_and_clean.py` | Fetch URLs via Jina Reader with caching | `python fetch_and_clean.py --input urls.json --output results.json` |
+| `fetch_and_clean.py` | Fetch URLs via Jina Reader with caching | `python scripts/fetch_and_clean.py --input urls.json --output results.json` |
 
 ### Vault Utilities
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `discover_vault.py` | One-time setup — generate config | `python discover_vault.py` |
-| `ingest.py` | Fetch a URL into vault inbox | `python ingest.py "https://example.com/article"` |
-| `ingest_batch.py` | Batch URL ingestion from file | `python ingest_batch.py urls.txt` |
-| `claude_pipe.py` | Pipe any note through Claude | `python claude_pipe.py --file note.md --prompt summarize` |
-| `vault_lint.py` | Validate frontmatter fields | `python vault_lint.py` |
-| `find_broken_links.py` | Find unresolved wiki-links | `python find_broken_links.py` |
-| `find_related.py` | Find related notes by keyword | `python find_related.py note.md` |
+| `discover_vault.py` | One-time setup — generate config | `python scripts/discover_vault.py` |
+| `ingest.py` | Fetch a URL into vault inbox | `python scripts/ingest.py "https://example.com/article"` |
+| `ingest_batch.py` | Batch URL ingestion from file | `python scripts/ingest_batch.py urls.txt` |
+| `claude_pipe.py` | Pipe any note through Claude | `python scripts/claude_pipe.py --file note.md --prompt summarize` |
+| `vault_lint.py` | Validate frontmatter fields | `python scripts/vault_lint.py` |
+| `find_broken_links.py` | Find unresolved wiki-links | `python scripts/find_broken_links.py` |
+| `find_related.py` | Find related notes by keyword | `python scripts/find_related.py note.md` |
 
 ### Synthesis & Output
 
 | Script | Purpose | Usage |
 |--------|---------|-------|
-| `synthesize_folder.py` | Synthesize a folder into a MOC | `python synthesize_folder.py --folder "Research/AI" --output "AI-MOC.md"` |
-| `produce_output.py` | Transform note to output format | `python produce_output.py --file synthesis.md --format web_article` |
-| `transcript_processor.py` | Process Whisper transcript | `python transcript_processor.py interview.vtt` |
-| `daily_digest.py` | Daily vault summary | `python daily_digest.py` |
+| `synthesize_folder.py` | Synthesize a folder into a MOC | `python scripts/synthesize_folder.py --folder "Research/AI" --output "AI-MOC.md"` |
+| `produce_output.py` | Transform note to output format | `python scripts/produce_output.py --file synthesis.md --format web_article` |
+| `transcript_processor.py` | Process Whisper transcript | `python scripts/transcript_processor.py interview.vtt` |
+| `daily_digest.py` | Daily vault summary | `python scripts/daily_digest.py` |
 
 ## Output Formats
 
@@ -83,7 +84,7 @@ Available via `produce_output.py --format <name>`:
 - `talking_points` — Bullet-point talking points
 - `email_newsletter` — Email newsletter
 
-List all: `python produce_output.py --list-formats`
+List all: `python scripts/produce_output.py --list-formats`
 
 ## What you need
 
@@ -111,10 +112,10 @@ pip install -r requirements.txt
 ### 2. Configure your vault
 
 ```
-python discover_vault.py
+python scripts/discover_vault.py
 ```
 
-This scans your vault's folder structure and generates `config.py` (paths) and `.env` (API key). Open `.env` and paste your Anthropic API key on the `ANTHROPIC_API_KEY=` line. If you're already using Claude Code, this is the same key from your `ANTHROPIC_API_KEY` environment variable.
+This scans your vault's folder structure and generates `scripts/config.py` (paths) and `.env` (API key). Open `.env` and paste your Anthropic API key on the `ANTHROPIC_API_KEY=` line. If you're already using Claude Code, this is the same key from your `ANTHROPIC_API_KEY` environment variable.
 
 ### 3. Install the skills
 
@@ -139,7 +140,7 @@ Then open each skill's `SKILL.md` and replace the `{{placeholder}}` values with 
 | Placeholder | What to put there | Example |
 |-------------|-------------------|---------|
 | `{{VAULT_ROOT}}` | Your Obsidian vault folder | `C:\Users\you\Documents\My Vault` |
-| `{{SCRIPTS_DIR}}` | Where you cloned this repo | `C:\Users\you\Projects\research-workflow` |
+| `{{SCRIPTS_DIR}}` | Where you cloned this repo (the repo root) | `C:\Users\you\Projects\research-workflow` |
 | `{{PYTHON_PATH}}` | Your Python executable | `C:\Users\you\AppData\Local\Programs\Python\Python312\python.exe` |
 | `{{HOME}}` | Your home directory | `C:\Users\you` or `/Users/you` |
 

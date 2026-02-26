@@ -12,24 +12,24 @@ os.environ.setdefault("INBOX_PATH", "C:/Users/tim/OneDrive/Documents/Tim's Vault
 
 
 def test_slugify_basic():
-    from ingest import slugify
+    from utils import slugify
     assert slugify("Hello World") == "hello-world"
 
 
 def test_slugify_special_chars():
-    from ingest import slugify
+    from utils import slugify
     assert slugify("Hello, World! (2024)") == "hello-world-2024"
 
 
 def test_slugify_max_length():
-    from ingest import slugify
+    from utils import slugify
     long = "a" * 100
     result = slugify(long)
     assert len(result) <= 60
 
 
 def test_slugify_leading_trailing_hyphens():
-    from ingest import slugify
+    from utils import slugify
     result = slugify("---hello---")
     assert not result.startswith("-")
     assert not result.endswith("-")

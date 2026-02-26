@@ -24,6 +24,7 @@ from rich.prompt import Confirm
 
 import config
 from claude_pipe import call_claude, estimate_cost, load_prompt_template
+from utils import startup_checks
 
 console = Console()
 
@@ -106,12 +107,6 @@ def build_output_frontmatter(
     )
 
 
-def startup_checks():
-    if not config.VAULT_PATH.exists():
-        console.print(f"[red]VAULT_PATH does not exist: {config.VAULT_PATH}[/red]")
-        sys.exit(1)
-
-
 def main():
     parser = argparse.ArgumentParser(description="Synthesize a folder of notes into a MOC via Claude.")
     parser.add_argument("--folder", required=True, help="Path to folder of notes to synthesize")
@@ -134,8 +129,8 @@ def main():
 
     if use_repomix:
         console.print("Using repomix to package notes...")
-        repomix_config = Path(__file__).parent / "repomix.config.json"
-        repomix_output = Path(__file__).parent / "repomix-output.txt"
+        repomix_config = config.PROJECT_ROOT / "repomix.config.json"
+        repomix_output = config.PROJECT_ROOT / "repomix-output.txt"
         try:
             context = run_repomix(folder, repomix_config, repomix_output)
             used_repomix = True

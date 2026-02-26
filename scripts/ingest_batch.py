@@ -19,7 +19,8 @@ from rich.console import Console
 from rich.progress import track
 
 import config
-from ingest import ingest_url, startup_checks
+from ingest import ingest_url
+from utils import startup_checks
 
 console = Console()
 
@@ -47,7 +48,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    startup_checks()
+    startup_checks(require_api_key=True, ensure_inbox=True)
 
     url_file = Path(args.url_file)
     urls = parse_url_file(url_file)
@@ -67,7 +68,7 @@ def main():
 
     console.print(f"\n[green]Succeeded:[/green] {succeeded} / {len(urls)}")
     if failed:
-        failed_path = Path(__file__).parent / ".tmp" / "failed_urls.txt"
+        failed_path = config.PROJECT_ROOT / ".tmp" / "failed_urls.txt"
         failed_path.parent.mkdir(parents=True, exist_ok=True)
         write_failed_urls(failed, failed_path)
         console.print(f"[yellow]Failed URLs written to:[/yellow] {failed_path}")

@@ -20,7 +20,7 @@ from rich.console import Console
 
 import config
 from claude_pipe import call_claude, estimate_cost, load_prompt_template
-from ingest import slugify
+from utils import slugify, startup_checks
 
 console = Console()
 
@@ -59,12 +59,6 @@ def build_output_paths(output_dir: Path, date_str: str, slug: str) -> tuple[Path
     notes = output_dir / f"{date_str}-{slug}-notes.md"
     quotes = output_dir / f"{date_str}-{slug}-quotes.md"
     return notes, quotes
-
-
-def startup_checks():
-    if not config.VAULT_PATH.exists():
-        console.print(f"[red]VAULT_PATH does not exist: {config.VAULT_PATH}[/red]")
-        sys.exit(1)
 
 
 def main():

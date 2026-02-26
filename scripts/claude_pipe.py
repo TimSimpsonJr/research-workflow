@@ -20,6 +20,7 @@ import anthropic
 from rich.console import Console
 
 import config
+from utils import startup_checks
 
 console = Console()
 
@@ -95,23 +96,6 @@ def write_output(
     output_path.write_text(frontmatter + response_text, encoding="utf-8", newline="\n")
 
 
-def startup_checks():
-    """Verify required config before running."""
-    errors = []
-    try:
-        import anthropic as _anthropic  # noqa: F401
-    except ImportError:
-        errors.append("anthropic package not installed — run: pip install anthropic")
-    if not config.ANTHROPIC_API_KEY:
-        errors.append("ANTHROPIC_API_KEY is not set in .env")
-    if not config.VAULT_PATH.exists():
-        errors.append(f"VAULT_PATH does not exist: {config.VAULT_PATH}")
-    if errors:
-        for e in errors:
-            console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
-
-
 def main():
     parser = argparse.ArgumentParser(description="Pipe a file through Claude with a named prompt template.")
     parser.add_argument("--file", required=True, help="Path to the input file")
@@ -122,7 +106,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Print message without calling API")
     args = parser.parse_args()
 
-    startup_checks()
+    startup_checks(require_api_key=True)
 
     model = config.CLAUDE_MODEL_LIGHT if args.model == "light" else config.CLAUDE_MODEL_HEAVY
     file_path = Path(args.file)

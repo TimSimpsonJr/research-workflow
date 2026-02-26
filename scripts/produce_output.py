@@ -22,7 +22,7 @@ from rich.table import Table
 
 import config
 from claude_pipe import call_claude, estimate_cost
-from ingest import slugify
+from utils import slugify, startup_checks
 
 console = Console()
 
@@ -47,12 +47,6 @@ def build_output_path(output_dir: Path, date_str: str, source_slug: str, fmt: st
     if fmt == "daily_digest":
         return output_dir / f"{date_str}-{source_slug}-{fmt}.md"
     return output_dir / f"{source_slug}-{fmt}.md"
-
-
-def startup_checks():
-    if not config.VAULT_PATH.exists():
-        console.print(f"[red]VAULT_PATH does not exist: {config.VAULT_PATH}[/red]")
-        sys.exit(1)
 
 
 def main():

@@ -21,6 +21,7 @@ from rich.prompt import Prompt
 from rich.table import Table
 
 import config
+from utils import startup_checks
 
 console = Console()
 
@@ -73,12 +74,6 @@ def fix_issue(note_path: Path, missing_fields: list[str]) -> None:
 
     new_fm = fm_text.rstrip() + "\n" + "\n".join(additions) + "\n"
     note_path.write_text(f"---{new_fm}---{rest}", encoding="utf-8", newline="\n")
-
-
-def startup_checks():
-    if not config.VAULT_PATH.exists():
-        console.print(f"[red]VAULT_PATH does not exist: {config.VAULT_PATH}[/red]")
-        sys.exit(1)
 
 
 def main():

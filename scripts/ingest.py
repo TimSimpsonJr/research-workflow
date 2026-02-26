@@ -21,18 +21,10 @@ import requests
 from rich.console import Console
 
 import config
+from fetch_and_clean import validate_url
+from utils import slugify, startup_checks
 
 console = Console()
-
-
-def slugify(text: str, max_length: int = 60) -> str:
-    """Convert text to a URL-safe slug."""
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
-    text = re.sub(r"[\s]+", "-", text.strip())
-    text = re.sub(r"-+", "-", text)
-    text = text[:max_length].strip("-")
-    return text
 
 
 def extract_title(content: str, url: str) -> str:
@@ -90,28 +82,11 @@ def fetch_url(url: str) -> str:
 
     Raises ValueError if the URL targets a private/internal address.
     """
-    from fetch_and_clean import validate_url
     validate_url(url)
     jina_url = f"{config.JINA_BASE_URL}/{url}"
     response = requests.get(jina_url, timeout=30)
     response.raise_for_status()
     return response.text
-
-
-def startup_checks():
-    errors = []
-    if not config.ANTHROPIC_API_KEY:
-        errors.append("ANTHROPIC_API_KEY not set in .env")
-    if not config.VAULT_PATH.exists():
-        errors.append(f"VAULT_PATH does not exist: {config.VAULT_PATH}")
-    inbox = config.INBOX_PATH
-    if not inbox.exists():
-        console.print(f"[yellow]Inbox not found, creating: {inbox}[/yellow]")
-        inbox.mkdir(parents=True)
-    if errors:
-        for e in errors:
-            console.print(f"[red]Error:[/red] {e}")
-        sys.exit(1)
 
 
 def ingest_url(url: str, dry_run: bool = False) -> Path | None:
@@ -156,7 +131,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
-    startup_checks()
+    startup_checks(require_api_key=True, ensure_inbox=True)
     ingest_url(args.url, dry_run=args.dry_run)
 
 
