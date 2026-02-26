@@ -19,7 +19,7 @@ from pathlib import Path
 from rich.console import Console
 
 import config
-from claude_pipe import call_claude, estimate_cost
+from claude_pipe import call_claude, estimate_cost, load_vault_rules
 from utils import startup_checks
 
 console = Console()
@@ -122,7 +122,10 @@ def main():
         "Write a brief digest (3-5 sentences) summarizing the key themes and new information added today. "
         "Be concise and factual."
     )
+    vault_rules = load_vault_rules(config.PROMPTS_PATH)
     message = f"{combined}\n\n---\n{summarize_prompt}"
+    if vault_rules:
+        message += f"\n\n---\n{vault_rules}"
 
     if args.dry_run:
         console.print(f"[yellow]Dry run — {len(recent_notes)} notes, would append to {daily_note_path}[/yellow]")

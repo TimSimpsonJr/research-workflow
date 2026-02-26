@@ -142,24 +142,47 @@ Then stop.
 
 For each entry in `notes_to_create`:
 
-### 5a. Read relevant files
+### 5a. Prevent redundant notes
+
+Before creating or updating, check for redundancy:
+
+1. **Search for existing notes on the same topic.** Use Grep to search the vault:
+   - Search by title keywords from the note's `title`
+   - Search by abbreviation if the title includes one (e.g., search both "ALPR" and "Automatic License Plate Reader")
+   - Search by location or organization name if relevant
+2. **Check for stubs pointing elsewhere.** If you find an empty or near-empty stub (0-1 lines of content), check if a fuller version exists elsewhere in the vault. If so, delete the stub and update wikilinks to point to the full note.
+3. **Merge if appropriate.** If similar notes exist:
+   - Compare scope: Is one broader and the other more specific?
+   - Decide: Keep one as primary and link from the other, or merge content
+   - Update all wikilinks before deleting the redundant note
+4. **Don't create bridge stubs.** Avoid empty wikilink targets as "bridges." Link directly to the full content note, using an alias if the name is long: `[[Full Note Title|display text]]`
+
+### 5b. Read relevant files
 
 Read all files in `vault_context.existing_notes_found` plus any notes referenced in `suggested_links`. Store contents keyed by path.
 
-### 5b. Synthesize note content
+### 5c. Synthesize note content
 
 Write the complete note content following ALL of these rules:
 
 **Wikilinks:**
-- Add `[[wikilinks]]` from `suggested_links` where the topic appears in the note
-- Add `[[stub_links]]` for concepts in `stub_links` that don't have notes yet
+- Add `[[wikilinks]]` from `suggested_links` where the linked topic actually appears in the note content
+- Scan the note content for mentions of existing vault notes (from the file list in Step 4) and add `[[wikilinks]]` to them
+- For concepts in `stub_links` that don't have notes yet, add `[[stub wikilinks]]` and include a brief inline note about what to research (e.g., "[[Topic Name]] — worth investigating for connection to X"). **Do not create empty stub files.** Only create a stub file if it will contain at least a title, purpose statement, and TODO section.
+- Use aliases for long titles: `[[Full Note Title|display text]]`
+- Do not wikilink generic terms — only link specific, notable concepts worthy of their own note
 
 **Tags:**
-- Include `suggested_tags` in the frontmatter YAML
+- Include tags in YAML frontmatter: `tags: [content-type, location, other-relevant-tags]`
+- Start with a content-type tag from `suggested_tags`: research, legislation, campaign, plan, reference, tracking, decision, index, resource, meta
+- Add location tags (greenville-sc, sc, etc.) if the content discusses specific places
+- Add purpose prefixes (strategic-, tactical-) if the content informs decisions or implementation
+- See `docs/TAGGING-REFERENCE.md` for complete tag list
 
 **Sources:**
-- Include the full source URL inline at the point where first referenced
+- Include the full source URL as an inline link at the point where it is first referenced
 - Add a `## Sources` section at the bottom listing all `source_urls`
+- Every factual claim from external research should be traceable to its source
 
 **Format matching:**
 - If `action` is `update` or `folder` contains existing notes, match their section structure exactly
@@ -169,12 +192,12 @@ Write the complete note content following ALL of these rules:
 
 **For `update`:** Merge new information into the existing note. Expand sections. Never discard existing content.
 
-### 5c. Write the note
+### 5d. Write the note
 
 - `create`: Write to `{{VAULT_ROOT}}/{folder}/{filename}`
 - `update`: Overwrite the existing note path
 
-### 5d. Update MOC notes
+### 5e. Update MOC notes
 
 If `suggested_moc_update` is not null, read that MOC file and add/update an entry for the note just written. Match the MOC's existing format exactly.
 
