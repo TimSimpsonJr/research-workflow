@@ -2,236 +2,342 @@
 
 ## Overview
 
-Add an end-to-end pipeline for ingesting local files of any format into the Obsidian vault. Mirrors the architecture of the existing `/research` pipeline but replaces URL fetching with local file parsing. Invoked as a Claude Code skill.
+Add an end-to-end pipeline for ingesting local files of any format into the Obsidian vault. Mirrors the architecture of the existing `/research` pipeline: Python for I/O, Haiku subagents for extraction and classification, Sonnet orchestrator for synthesis and note writing. **No direct Claude API calls** — all intelligence is subagents managed by the skill, just like `/research`.
 
 ---
 
 ## Architecture
 
+The key insight: `/research` and `/ingest-local` **converge after the "get markdown" step**. They differ only in the source layer:
+
 ```
-/ingest-local ~/Documents/research-dump/
+/research:      topic → Haiku search → fetch_and_clean.py → content_results.json
+/ingest-local:  paths → parse_local.py                    → content_results.json
+                         ↓ (same shape)                       ↓ (same shape)
+                ─────────────────────────────────────────────────────────────
+                Tier 1: Haiku subagent — extract structured content
+                Tier 2: Haiku subagent — classify into vault structure
+                Tier 3: Sonnet orchestrator — write notes + synthesize_folder.py for MOC
+```
 
-Tier 0: Parse (Python, no API)
-  → Convert any file format to markdown text
-  → Chunk large files to stay within token limits
-  → Cache parsed results by file hash
+### What runs where
 
-Tier 1: Extract (Haiku)
-  → Structured extraction per file: claims, key points, quotes, entities, metadata
-  → Batched — multiple small files per API call where possible
+| Component | Executor | Why |
+|-----------|----------|-----|
+| File discovery + parsing | Python (`parse_local.py` via Bash) | Needs libraries (pymupdf, mammoth, whisper), no Claude |
+| Structured extraction | Haiku subagent (Task tool) | Intelligence, cheap |
+| Vault classification | Haiku subagent (Task tool) | Same pattern as `/research`, needs Glob for vault file list |
+| Note writing | Sonnet orchestrator (the skill itself) | Needs Write tool, synthesis reasoning |
+| MOC generation | Python (`synthesize_folder.py` via Bash) | Already exists, reuse it |
 
-Tier 2: Classify (Haiku)
-  → Reuse existing research-classify skill pattern
-  → Determine folder, tags, wikilinks, MOC updates
+### No direct API calls
 
-Tier 3: Synthesize (Sonnet)
-  → Cross-reference extracted content across files
-  → Write final vault notes with wikilinks, tags, frontmatter
-  → Generate MOC if multiple files share a theme
+`claude_pipe.py` is **not used** by this pipeline. All Claude interactions are subagents spawned via the Task tool, exactly like `/research`. This means:
+- Single auth path (Claude Code manages credentials)
+- Subagents have tool access (Glob, Read, Write)
+- No API key management in Python for this pipeline
+- Cost tracking handled by Claude Code
+
+---
+
+## Unified Intermediate Format
+
+`parse_local.py` outputs JSON with the **same shape** as `fetch_and_clean.py`. Downstream tiers don't know or care whether content came from a URL or a local file.
+
+```json
+{
+  "topic": "batch-2026-02-26-research-papers",
+  "source_type": "local",
+  "fetched": [
+    {
+      "url": "file:///home/user/Documents/paper.pdf",
+      "source_path": "/home/user/Documents/paper.pdf",
+      "title": "Extracted or inferred title",
+      "content": "# Title\n\nMarkdown content here...",
+      "fetch_method": "pymupdf4llm",
+      "cache_hit": false,
+      "fetched_at": "2026-02-26T12:00:00Z",
+      "word_count": 4500,
+      "format": "pdf",
+      "chunks": null
+    }
+  ],
+  "failed": [
+    {
+      "url": "file:///home/user/Documents/corrupt.pdf",
+      "source_path": "/home/user/Documents/corrupt.pdf",
+      "error": "PyMuPDF: cannot open damaged file",
+      "attempts": ["pymupdf4llm"]
+    }
+  ],
+  "stats": {
+    "total_files": 25,
+    "parsed": 23,
+    "failed": 2,
+    "cache_hits": 10,
+    "total_words": 112000,
+    "estimated_tokens": 149000
+  }
+}
+```
+
+Key compatibility points:
+- `fetched[]` array with `{url, title, content, word_count}` — same keys as `fetch_and_clean.py`
+- `url` field uses `file://` scheme for local files — classify skill sees a URL either way
+- `failed[]` array with `{url, error}` — same shape
+- Added fields (`source_path`, `format`, `chunks`) are additive, won't break existing consumers
+
+For **large files that need chunking**, the `chunks` field replaces `content`:
+
+```json
+{
+  "url": "file:///home/user/Books/long-book.epub",
+  "title": "A Very Long Book",
+  "content": "[chunked — see chunks array]",
+  "chunks": [
+    { "index": 0, "total": 5, "heading": "Chapter 1", "content": "...", "word_count": 8000 },
+    { "index": 1, "total": 5, "heading": "Chapter 2", "content": "...", "word_count": 9200 }
+  ],
+  "word_count": 45000,
+  "format": "epub"
+}
 ```
 
 ---
 
 ## New Files
 
-### 1. `scripts/parse_file.py` — Format-agnostic file parser (Tier 0)
+### 1. `scripts/parse_local.py` — File discovery + parsing (Tier 0)
 
-**Purpose**: Convert any supported file to markdown text. No API calls. Pure Python.
+**Purpose**: Discover files, convert to markdown, cache results, output `content_results.json`. Pure Python, no Claude API calls.
+
+**CLI interface** (mirrors `fetch_and_clean.py`):
+```bash
+python parse_local.py --input /path/to/file_or_dir --output .tmp/content_results.json
+python parse_local.py --input /path/to/dir --recursive --output .tmp/content_results.json
+python parse_local.py --input /path/to/dir --exclude "*.log,*.tmp" --dry-run
+```
+
+**Discovery logic**:
+- Single file → parse it
+- Directory → collect all supported files (non-recursive by default)
+- `--recursive` → recurse into subdirectories
+- `--exclude` → glob patterns to skip
+- Report unsupported file types encountered
 
 **Supported formats and libraries**:
 
 | Format | Library | Notes |
 |--------|---------|-------|
-| PDF | `pymupdf4llm` (PyMuPDF) | Best markdown output for PDFs. Falls back to `pdfplumber` for scanned/image PDFs |
-| DOCX | `mammoth` | Clean HTML-to-markdown conversion |
+| PDF | `pymupdf4llm` (PyMuPDF) | Direct markdown output with headings, bold, lists |
+| DOCX | `mammoth` | HTML-to-markdown conversion |
 | EPUB | `ebooklib` + `html2text` | Chapter-by-chapter extraction |
-| RTF | `striprtf` | Lightweight RTF-to-text |
-| CSV | stdlib `csv` | Convert to markdown table, with summary row for large files |
+| RTF | `striprtf` | RTF-to-text |
+| CSV | stdlib `csv` | Markdown table, summary for large files |
 | JSON | stdlib `json` | Pretty-print with structure description |
-| XML | stdlib `xml.etree` | Extract text content, preserve structure as headings |
+| XML | stdlib `xml.etree` | Text content, structure as headings |
 | YAML | `PyYAML` (already a dep) | Pretty-print |
-| Markdown/TXT | passthrough | Normalize frontmatter if present |
-| VTT/SRT | existing `strip_vtt()` | Reuse from `transcript_processor.py` |
-| Kindle highlights | custom parser | Parse "My Clippings.txt" or Kindle HTML exports |
-| Readwise exports | custom parser | Parse Readwise CSV/JSON export format |
-| Audio/Video | `whisper` (OpenAI) via CLI | Shell out to `whisper` binary, produce transcript, then parse |
+| MD/TXT | passthrough | Normalize frontmatter if present |
+| VTT/SRT | reuse `strip_vtt()` from `transcript_processor.py` | Import, don't duplicate |
+| Kindle | custom parser | "My Clippings.txt" and Kindle HTML exports |
+| Readwise | custom parser | Readwise CSV/JSON export format |
+| Audio/Video | `whisper` CLI (local) | Shell out, produce transcript, then passthrough |
 
-**Chunking strategy**:
-- Files producing > 100K chars of markdown get split into chunks
-- Chunk at natural boundaries: page breaks (PDF), chapters (EPUB), sections (headings in any format)
-- Each chunk is processed independently through Tier 1, then reassembled for Tier 2+
-- Chunk metadata (position, total chunks) preserved for reassembly
+**Chunking** (for files producing >100K chars of markdown):
+- PDF: chunk by page ranges (e.g., pages 1-20, 21-40)
+- EPUB: chunk by chapter
+- All others: chunk by heading sections (`## ` boundaries)
+- Each chunk carries `{index, total, heading}` metadata
 
-**Caching**:
-- Cache parsed markdown by SHA-256(file content) in `.cache/parse/`
-- Same cache structure as `fetch_and_clean.py` (JSON with content_hash integrity check)
-- Cache invalidated if source file is modified (mtime check + hash verify)
+**Caching** (same pattern as `fetch_and_clean.py`):
+- Cache dir: `.cache/parse/`
+- Cache key: SHA-256 of file content
+- Cache entry: JSON with `content_hash` integrity check (same as `fetch_and_clean.py`)
+- Invalidation: content hash mismatch (file was modified)
+- TTL: no expiry (local files don't change like web pages), but `--no-cache` flag to force re-parse
 
 **Key functions**:
-- `detect_format(path: Path) -> str` — identify file type by extension + magic bytes
-- `parse_file(path: Path) -> ParseResult` — main entry point, returns dataclass with `{content, title, metadata, format, chunks[]}`
-- `parse_pdf(path)`, `parse_docx(path)`, `parse_epub(path)`, etc. — format-specific parsers
-- `chunk_content(content: str, max_chars: int) -> list[Chunk]` — split at natural boundaries
-- Per-format parsers registered in a `PARSERS` dict for easy extension
+```python
+PARSERS: dict[str, Callable] = {
+    ".pdf": parse_pdf,
+    ".docx": parse_docx,
+    ".epub": parse_epub,
+    # ...registered for extension
+}
 
-### 2. `scripts/ingest_local.py` — Batch orchestrator (CLI entry point)
-
-**Purpose**: Collect files, estimate costs, run the 4-tier pipeline, track progress.
-
-**Input modes** (determined by argument type):
-- Single file: `python ingest_local.py /path/to/file.pdf`
-- Directory: `python ingest_local.py /path/to/folder/`
-- Directory + recursive: `python ingest_local.py /path/to/folder/ --recursive`
-- Glob pattern: `python ingest_local.py "/path/to/*.pdf"`
-
-**Processing flow**:
-1. **Discover** — collect all files, filter by supported formats, report unsupported
-2. **Parse** — run Tier 0 on each file (parallelizable, no API calls)
-3. **Estimate** — calculate token counts, estimate API costs for Tier 1-3, display summary
-4. **Confirm** — prompt user to proceed (skippable with `--confirm`)
-5. **Extract** — run Tier 1 (Haiku) on each parsed file/chunk
-6. **Classify** — run Tier 2 (Haiku) on all extracted content
-7. **Synthesize** — run Tier 3 (Sonnet) to write final vault notes
-8. **Report** — summary of created/updated notes, costs incurred
-
-**Progress & resumability**:
-- State file: `.tmp/ingest_state.json` tracking status per file
-- States: `pending → parsed → extracted → classified → written`
-- On re-run with `--resume`, skip files already in later states
-- Progress bar via `rich.progress`
-
-**CLI flags**:
-- `--recursive` — recurse into subdirectories
-- `--confirm` — skip cost confirmation prompt
-- `--resume` — resume interrupted batch from state file
-- `--dry-run` — parse only, show what would be processed
-- `--depth ingest|extract|synthesize` — stop at a specific tier (future flexibility even though default is full)
-- `--exclude "*.log,*.tmp"` — glob patterns to skip
-
-### 3. `scripts/prompts/extract_local.txt` — Extraction prompt (Tier 1)
-
-**Purpose**: Prompt template for Haiku to extract structured content from a parsed local file.
-
-**Outputs per file**:
-- Title (extracted or inferred)
-- Author / source attribution
-- Key claims / assertions
-- Notable quotes
-- Topics / themes (3-5 keywords)
-- Entities (people, organizations, places)
-- Summary (3-5 sentences)
-- Suggested tags (2-4)
-- Source file metadata (format, page count, word count)
-
-Similar to `extract_transcript.txt` but generalized for any content type.
-
-### 4. `scripts/prompts/synthesize_local_batch.txt` — Cross-file synthesis prompt (Tier 3)
-
-**Purpose**: Prompt template for Sonnet to synthesize across multiple extracted files.
-
-**Outputs**:
-- Thematic groupings of files
-- Cross-references and connections between files
-- Per-group MOC structure
-- Per-file vault note content with wikilinks to related notes
-
-### 5. `skills/ingest-local/SKILL.md` — Claude Code skill definition
-
-**Purpose**: The `/ingest-local` command that orchestrates the pipeline from within Claude Code.
-
-**Pattern**: Mirrors `skills/research/SKILL.md` structure:
-- Model check (expects Sonnet)
-- Parse input (file path, directory, or glob)
-- Spawn Haiku agents for extraction and classification
-- Run Python scripts for parsing
-- Sonnet writes final notes
-- Print summary
-
-**Invocation examples**:
-```
-/ingest-local ~/Documents/research-papers/
-/ingest-local ~/Downloads/important-report.pdf
-/ingest-local ~/Kindle/My Clippings.txt
-/ingest-local ~/interviews/recording.mp3
+def discover_files(path: Path, recursive: bool, exclude: list[str]) -> list[Path]
+def detect_format(path: Path) -> str  # by extension, magic bytes fallback
+def parse_file(path: Path, cache_dir: Path) -> dict  # returns fetched[] entry
+def chunk_content(content: str, max_chars: int, format: str) -> list[dict] | None
+def process_files(paths: list[Path], cache_dir: Path) -> tuple[list[dict], list[dict]]  # (parsed, failed) — same signature as fetch_and_clean.process_urls
 ```
 
-### 6. `tests/test_parse_file.py` — Tests for file parser
+Note: `process_files` mirrors `process_urls` from `fetch_and_clean.py` — same return signature, same error handling pattern.
+
+### 2. `scripts/prompts/extract_local.txt` — Extraction prompt (Tier 1)
+
+Prompt for Haiku subagent. Given markdown content from a parsed local file, output structured JSON:
+
+```
+Given the following document content, extract and output a JSON object with:
+- title: document title (from headings, filename, or inferred)
+- author: author/attribution if identifiable, null otherwise
+- claims: array of substantive factual assertions (max 10)
+- quotes: array of notable verbatim quotes with context (max 5)
+- topics: array of 3-5 topic keywords
+- entities: { people: [], organizations: [], places: [] }
+- summary: 3-5 sentence summary
+- suggested_tags: array of 2-4 vault tags
+- content_type: one of [reference, argument, narrative, data, correspondence, notes]
+
+Output only the JSON object. No backticks, no narration.
+```
+
+### 3. `skills/ingest-local/SKILL.md` — Claude Code skill (Sonnet orchestrator)
+
+**Purpose**: The `/ingest-local` command. Orchestrates the full pipeline.
+
+**Structure** (mirrors `skills/research/SKILL.md`):
+
+```
+Step 1: Parse Input
+  - Argument is a file path, directory, or glob
+  - Validate path exists
+
+Step 2: Run parse_local.py (Tier 0)
+  - Write input config to .tmp/ingest_input.json
+  - Run: python parse_local.py --input <path> --output .tmp/content_results.json
+  - Read content_results.json
+  - If all failed, report and stop
+
+Step 3: Cost Estimate + Confirm
+  - Calculate estimated tokens from content_results.stats
+  - Estimate Haiku cost (extraction + classification) + Sonnet cost (synthesis)
+  - Display: "N files, ~X tokens, estimated cost $Y.YY. Proceed?"
+  - Wait for user confirmation
+
+Step 4: Extract via Haiku (Tier 1)
+  - For each item in fetched[] (batch 5-10 per subagent for efficiency):
+    - Spawn Haiku subagent with extract_local.txt prompt + content
+    - Collect structured extraction JSON
+  - For chunked files: extract each chunk, then merge extractions
+  - Write .tmp/extract_results.json
+
+Step 5: Classify via Haiku (Tier 2)
+  - Read the generalized classify skill
+  - Spawn Haiku subagent with classify skill + extract_results.json
+  - Same pattern as /research Step 4
+  - Returns: notes_to_create[], vault_context
+
+Step 6: Write Notes (Tier 3)
+  - For each entry in notes_to_create[]:
+    - Read relevant existing vault files
+    - Synthesize note content (the Sonnet orchestrator does this itself)
+    - Add frontmatter with source_path reference (not copy, not move)
+    - Write to vault at classified path
+    - Update MOCs as indicated
+
+Step 7: Synthesize MOC (if multiple files share a theme)
+  - Run: python synthesize_folder.py --folder <output_folder> --output <moc_name>.md
+  - Reuses existing synthesis, don't rebuild
+
+Step 8: Print Summary
+  - Created: [paths]
+  - Updated: [paths]
+  - MOCs: [paths]
+  - Cost: $X.XX actual
+  - Warnings: [any failures]
+```
+
+### 4. `skills/ingest-classify/SKILL.md` — Generalized vault classifier
+
+**Purpose**: Extended version of `research-classify` that handles any content type, not just web research articles.
+
+**Changes from `research-classify`**:
+- Content types expanded: `reference`, `argument`, `narrative`, `data`, `correspondence`, `notes`, `campaign`, `legislation`, `general_research` (original types preserved for backward compatibility)
+- Classification uses both the extraction JSON (from Tier 1) AND the vault file list (via Glob) to determine placement
+- Same output format as `research-classify` — `notes_to_create[]` + `vault_context`
+
+**Note**: `research-classify` remains unchanged. `/research` continues using it. `/ingest-local` uses `ingest-classify`. If the generalized version proves reliable, `/research` can switch to it later.
+
+### 5. `tests/test_parse_local.py` — Tests for file parser
 
 **Coverage**:
-- Format detection for each supported type
-- Parsing correctness for each format (with small fixture files)
-- Chunking logic (boundary detection, reassembly)
-- Cache hit/miss/invalidation
-- Graceful handling of corrupt or empty files
-- Unsupported format error messages
-
-### 7. `tests/test_ingest_local.py` — Tests for batch orchestrator
-
-**Coverage**:
-- File discovery (single file, directory, recursive, glob)
-- Cost estimation calculation
-- State file creation and resume logic
-- Progress tracking
-- Exclude pattern filtering
+- Format detection (extension-based, with edge cases)
+- Per-format parsing (small fixture files in `tests/fixtures/`)
+- Chunking logic: boundary detection, metadata, reassembly
+- Output JSON shape matches `fetch_and_clean.py` format
+- Cache: hit, miss, invalidation on content change
+- Discovery: single file, directory, recursive, exclude patterns
+- Graceful handling: corrupt files, empty files, unsupported formats
+- `process_files` returns same shape as `process_urls`
 
 ---
 
 ## Modified Files
 
-### 8. `requirements.txt` — New dependencies
+### 6. `requirements.txt` — New dependencies
 
-Add:
 ```
-pymupdf4llm>=0.0.10       # PDF to markdown (PyMuPDF-based)
+pymupdf4llm>=0.0.10       # PDF to markdown
 mammoth>=1.8.0             # DOCX to markdown
 ebooklib>=0.18             # EPUB parsing
-html2text>=2024.2.26       # HTML to markdown (for EPUB chapters)
+html2text>=2024.2.26       # HTML to markdown (for EPUB)
 striprtf>=0.0.26           # RTF to text
-openai-whisper>=20231117   # Audio/video transcription (optional)
 ```
 
-Note: `whisper` is optional — if not installed, audio/video files are skipped with a warning. The parser will check for availability at runtime.
+`openai-whisper` is **not** added to requirements. It's a runtime-optional dependency: `parse_local.py` checks if the `whisper` CLI is on PATH. If not, audio/video files are skipped with a clear warning. This avoids dragging PyTorch into the dependency tree for users who don't need transcription.
 
-### 9. `scripts/utils.py` — Shared utilities
+### 7. `scripts/config.py` template (via `discover_vault.py`)
 
 Add:
-- `estimate_batch_cost(file_count, avg_tokens, model_tiers)` — cost estimation helper
-- `format_file_size(bytes)` — human-readable file sizes for progress display
+```python
+PARSE_CACHE_DIR = PROJECT_ROOT / ".cache" / "parse"
+SUPPORTED_FORMATS = {".pdf", ".docx", ".epub", ".rtf", ".csv", ".json", ".xml", ".yaml", ".yml", ".md", ".txt", ".vtt", ".srt"}
+MAX_CHUNK_CHARS = 100_000
+WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base")
+```
 
-### 10. `scripts/config.py` template (via `discover_vault.py`)
+### 8. `transcript_processor.py` — Mark as legacy
 
-Add new config constants:
-- `PARSE_CACHE_DIR` — `.cache/parse/` (parallel to `.cache/fetch/`)
-- `SUPPORTED_FORMATS` — list of extensions this pipeline handles
-- `MAX_CHUNK_CHARS` — default 100,000
-- `WHISPER_MODEL` — default "base" (configurable for quality vs speed)
+Add a docstring note:
+```python
+# Legacy: For new ingestion workflows, use /ingest-local which handles
+# audio files via parse_local.py (whisper → markdown → extract → classify → write).
+# This script still works for standalone transcript processing.
+```
+
+No functional changes. It continues to work for direct CLI usage.
 
 ---
 
 ## Implementation Order
 
-1. **`parse_file.py`** + **`test_parse_file.py`** — the parser is the foundation. Start with PDF + DOCX + plain text, then add remaining formats.
-2. **`prompts/extract_local.txt`** + **`prompts/synthesize_local_batch.txt`** — prompt templates.
-3. **`ingest_local.py`** + **`test_ingest_local.py`** — orchestrator wiring the tiers together.
-4. **`skills/ingest-local/SKILL.md`** — Claude Code skill definition.
-5. **`requirements.txt`** + **`utils.py`** + **`config.py`** updates — dependency and config changes.
-6. Integration testing — end-to-end with sample files.
+1. **`parse_local.py` + `test_parse_local.py`** — Foundation. Start with PDF + DOCX + MD/TXT passthrough. Add remaining formats incrementally.
+2. **`prompts/extract_local.txt`** — Extraction prompt template.
+3. **`skills/ingest-classify/SKILL.md`** — Generalized classifier (extend `research-classify` pattern).
+4. **`skills/ingest-local/SKILL.md`** — The orchestrator skill wiring Tiers 0-3.
+5. **Config + dependency updates** — `requirements.txt`, `config.py` template, `transcript_processor.py` legacy note.
+6. **Integration testing** — End-to-end with sample files of each format.
 
 ---
 
-## Design Decisions & Trade-offs
+## Design Decisions
 
-**Why `pymupdf4llm` over `pdfplumber`?**
-`pymupdf4llm` outputs markdown directly (headings, bold, lists) rather than raw text extraction. Better for vault notes. Falls back to `pdfplumber` for edge cases.
+**Why no `ingest_local.py` orchestrator script?**
+The skill IS the orchestrator, just like `/research`. Adding a Python orchestrator between the skill and the subagents would be a layer that doesn't exist in `/research` and doesn't add value. Python handles I/O (`parse_local.py`), the skill handles intelligence (subagents + synthesis).
 
-**Why shell out to `whisper` instead of using the Python API?**
-Keeps whisper as an optional dependency. Users who don't need audio transcription don't need to install a 1.5GB model. The CLI binary is the standard interface.
+**Why a separate `ingest-classify` instead of modifying `research-classify`?**
+Risk management. `/research` is working. Changing its classifier could break it. Better to create a generalized variant, prove it works, then optionally migrate `/research` to it later.
 
-**Why reuse the existing `research-classify` skill?**
-The classification logic (folder routing, tag suggestion, wikilink detection, MOC updates) is format-agnostic. The input is already markdown by the time it reaches Tier 2. No reason to duplicate.
+**Why `file://` URLs in the unified format?**
+The classify skill checks URLs for provenance. Using `file://` scheme means the skill sees a valid URL without special-casing. The `source_path` field carries the real path for frontmatter.
 
-**Why not a watched folder / daemon?**
-Adds process management complexity (systemd, launchd, Windows services). A Claude Code skill invocation is explicit, auditable, and consistent with the existing workflow. Can always add a watcher later as a separate concern.
+**Why batch extraction subagents (5-10 files per call)?**
+One subagent per file = hundreds of sequential Task spawns = slow. One subagent for all files = context overflow. Batching 5-10 small files per Haiku subagent balances throughput with context limits. Large/chunked files get their own subagent.
 
-**Chunking at natural boundaries vs fixed size?**
-Fixed-size chunks split mid-sentence and lose context. Natural boundaries (pages, chapters, headings) preserve semantic coherence, which matters for extraction quality. The trade-off is slightly uneven chunk sizes, but that's acceptable.
+**Why reuse `synthesize_folder.py` for MOC generation?**
+It already does exactly this: collect .md files in a folder, send to Claude, write MOC. Rebuilding it inside the skill would duplicate tested logic. The skill writes individual notes, then calls `synthesize_folder.py` on the output folder.
+
+**Why whisper is not in requirements.txt?**
+Adding `openai-whisper` pulls in PyTorch (~2GB). Most users won't need audio transcription. Checking for the `whisper` CLI at runtime and giving a clear skip message is the right trade-off.
