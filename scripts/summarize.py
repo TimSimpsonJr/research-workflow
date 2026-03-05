@@ -40,14 +40,7 @@ def _load_prompt() -> str:
     return PROMPT_PATH.read_text(encoding="utf-8").strip()
 
 
-def _slugify(text: str, max_length: int = 60) -> str:
-    """Convert text to a URL-safe slug."""
-    text = text.lower()
-    text = re.sub(r"[^a-z0-9\s-]", "", text)
-    text = re.sub(r"[\s]+", "-", text.strip())
-    text = re.sub(r"-+", "-", text)
-    text = text[:max_length].strip("-")
-    return text
+from text_utils import slugify as _slugify
 
 
 # ──────────────────────────────────────────────

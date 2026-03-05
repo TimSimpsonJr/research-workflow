@@ -26,6 +26,8 @@ from urllib.parse import urlparse, unquote, parse_qs
 
 import requests
 
+from fetch_and_clean import validate_url
+
 # ──────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────
@@ -164,6 +166,7 @@ def download_media_file(
     Returns {"url", "local_path", "type", "size_bytes"} or None if skipped/failed.
     """
     try:
+        validate_url(url)
         with requests.get(url, stream=True, timeout=30) as resp:
             resp.raise_for_status()
 
@@ -272,6 +275,7 @@ def download_video(
     None on failure.  Never raises.
     """
     try:
+        validate_url(url)
         video_id = _extract_video_id(url)
         target_dir = Path(assets_dir) / topic_slug
         target_dir.mkdir(parents=True, exist_ok=True)

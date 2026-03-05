@@ -285,3 +285,59 @@ def test_process_urls_parallel_respects_cache(tmp_path):
         )
     mock.assert_not_called()
     assert fetched[0]["cache_hit"] is True
+
+
+# ── validate_url (SSRF protection) ────────────
+
+def test_validate_url_blocks_ftp_scheme():
+    from fetch_and_clean import validate_url
+    with pytest.raises(ValueError, match="Blocked URL scheme"):
+        validate_url("ftp://example.com/file.txt")
+
+
+def test_validate_url_blocks_file_scheme():
+    from fetch_and_clean import validate_url
+    with pytest.raises(ValueError, match="Blocked URL scheme"):
+        validate_url("file:///etc/passwd")
+
+
+def test_validate_url_blocks_localhost():
+    from fetch_and_clean import validate_url
+    with pytest.raises(ValueError, match="Blocked hostname"):
+        validate_url("http://localhost/admin")
+
+
+def test_validate_url_blocks_loopback_ip():
+    from fetch_and_clean import validate_url
+    with pytest.raises(ValueError, match="Blocked private/reserved IP"):
+        validate_url("http://127.0.0.1/secret")
+
+
+def test_validate_url_blocks_private_ip():
+    from fetch_and_clean import validate_url
+    with pytest.raises(ValueError, match="Blocked private/reserved IP"):
+        validate_url("http://192.168.1.1/admin")
+
+
+def test_validate_url_blocks_10_net():
+    from fetch_and_clean import validate_url
+    with pytest.raises(ValueError, match="Blocked private/reserved IP"):
+        validate_url("http://10.0.0.1/internal")
+
+
+def test_validate_url_allows_public_https():
+    from fetch_and_clean import validate_url
+    # Should not raise
+    validate_url("https://example.com/article")
+
+
+def test_validate_url_blocks_dns_to_private(monkeypatch):
+    import socket
+    from fetch_and_clean import validate_url
+
+    def fake_getaddrinfo(host, port, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', ('192.168.1.1', 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    with pytest.raises(ValueError, match="resolves to private IP"):
+        validate_url("http://evil.example.com/steal")
