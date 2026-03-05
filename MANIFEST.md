@@ -35,7 +35,12 @@ scripts/
   ingest_local.py                # Local file ingestion (.docx/.doc/.pdf/.mp3 → inbox)
   vault_lint.py                  # Frontmatter validation across vault
   find_broken_links.py           # Unresolved wikilink detection
+  search_searxng.py              # SearXNG search backend — scored results for full tier (alternative to search-agent)
   produce_output.py              # Note → downstream format via Ollama or file output for Claude Code
+
+docker/
+  docker-compose.yml             # SearXNG container (full tier infrastructure)
+  searxng/settings.yml           # SearXNG engine config (Google, DuckDuckGo, Bing)
 
 scripts/prompts/
   README.md                      # Assembly pattern docs
@@ -52,6 +57,14 @@ tests/
   conftest.py                    # Adds scripts/ to sys.path
   test_*.py                      # One test module per script (all offline, no API keys)
 
+template-vault/
+  Inbox/.gitkeep                 # Empty inbox for incoming research notes
+  Projects/Example Topic/_MOC.md # Sample Map of Content for a research topic
+  Resources/.gitkeep             # Empty resources folder
+  Meta/Tags.md                   # Tag taxonomy reference (content types + modifiers)
+  assets/.gitkeep                # Empty assets folder for media
+  .research-workflow/config.json # Default pipeline config (base tier, relative paths)
+
 docs/
   plans/                         # Design documents and implementation plans
   handoff-token-efficiency.md    # Token optimization roadmap
@@ -66,5 +79,7 @@ docs/
 - `fetch_and_clean.py` + `fetch_media.py` are the fetch pipeline — URLs go through Jina Reader with cache, then media refs are downloaded separately
 - `summarize.py` branches on infrastructure: Ollama (mid/full tier) or file output for Haiku subagents (base tier)
 - `detect_tier.py` determines base/mid/full tier at startup — drives branching in summarize, search, and classify stages
+- `search_searxng.py` is the full-tier search backend — `detect_tier.py` checks SearXNG connectivity, and the research skill uses it as an alternative to search-agent when SearXNG is available
 - Skills use `{{VAULT_ROOT}}` and `{{REPO_ROOT}}` placeholders — filled during plugin setup
+- `template-vault/` is the starter vault offered by `research-setup/SKILL.md` when no existing vault is found — its `config.json` mirrors `default_config()` from `config_manager.py`
 - Agent definitions in `agents/` are read by the skill at runtime and passed as prompts to Haiku subagents via the Task tool
