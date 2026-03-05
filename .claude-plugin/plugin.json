@@ -1,0 +1,17 @@
+{
+  "name": "research-workflow",
+  "description": "Deep research pipeline for Obsidian vaults. Batch research, thread-pulling, media capture, vault-aware classification.",
+  "version": "2.0.0",
+  "author": {
+    "name": "Tim Simpson"
+  },
+  "repository": "https://github.com/TimSimpsonJr/research-workflow",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "obsidian",
+    "vault",
+    "pipeline",
+    "ollama"
+  ]
+}
