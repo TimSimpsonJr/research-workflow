@@ -1,0 +1,16 @@
+{
+  "vault_root": ".",
+  "inbox": "Inbox",
+  "assets": "assets",
+  "moc_pattern": "^_|MOC|Index|Hub",
+  "tag_format": "list",
+  "date_format": "%Y-%m-%d",
+  "frontmatter_fields": ["title", "tags", "source", "created"],
+  "ollama_enabled": false,
+  "ollama_model": null,
+  "ollama_benchmark_ms": null,
+  "searxng_url": null,
+  "whisper_available": false,
+  "ytdlp_available": false,
+  "tier": "base"
+}

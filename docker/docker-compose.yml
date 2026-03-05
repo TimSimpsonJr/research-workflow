@@ -1,0 +1,10 @@
+version: "3.7"
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: research-searxng
+    ports:
+      - "8888:8080"
+    volumes:
+      - ./searxng:/etc/searxng
+    restart: unless-stopped

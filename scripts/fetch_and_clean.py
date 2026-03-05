@@ -20,6 +20,7 @@ import os
 import socket
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from ipaddress import ip_address
 from pathlib import Path
@@ -282,6 +283,66 @@ def process_urls(
                 "error": str(exc),
                 "attempts": ["jina", "wayback"],
             })
+
+    return fetched, failed
+
+
+# ──────────────────────────────────────────────
+# Parallel fetching
+# ──────────────────────────────────────────────
+
+def _fetch_single(url_item: dict, cache_dir: Path, ttl_days: int,
+                  jina_api_key: str | None) -> tuple[dict | None, dict | None]:
+    """Fetch a single URL. Returns (fetched_dict, None) or (None, failed_dict)."""
+    url = url_item["url"]
+    cache_key = url_cache_key(url)
+
+    cached = load_cache(cache_dir, cache_key)
+    if cached is not None and not is_expired(cached, ttl_days):
+        truncated = cached["content"][:MAX_CONTENT_CHARS]
+        return {
+            "url": url, "title": cached.get("title", ""),
+            "content": truncated, "fetch_method": cached.get("fetch_method", "cached"),
+            "cache_hit": True, "fetched_at": cached["fetched_at"],
+            "word_count": len(truncated.split()),
+        }, None
+
+    try:
+        content, title, method = fetch_url(url, jina_api_key)
+        content = content[:MAX_CONTENT_CHARS]
+        now = datetime.now(timezone.utc).isoformat()
+        save_cache(cache_dir, cache_key, {
+            "url": url, "title": title, "content": content,
+            "fetch_method": method, "fetched_at": now,
+        })
+        return {
+            "url": url, "title": title, "content": content,
+            "fetch_method": method, "cache_hit": False,
+            "fetched_at": now, "word_count": len(content.split()),
+        }, None
+    except Exception as exc:
+        return None, {"url": url, "error": str(exc), "attempts": ["jina", "wayback"]}
+
+
+def process_urls_parallel(
+    urls: list[dict], cache_dir: Path, ttl_days: int,
+    jina_api_key: str | None, max_workers: int = 3,
+) -> tuple[list[dict], list[dict]]:
+    """Fetch URLs in parallel using ThreadPoolExecutor."""
+    fetched: list[dict] = []
+    failed: list[dict] = []
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {
+            pool.submit(_fetch_single, item, cache_dir, ttl_days, jina_api_key): item
+            for item in urls
+        }
+        for future in as_completed(futures):
+            result, error = future.result()
+            if result:
+                fetched.append(result)
+            if error:
+                failed.append(error)
 
     return fetched, failed
 

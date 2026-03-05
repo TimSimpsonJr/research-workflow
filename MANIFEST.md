@@ -1,0 +1,70 @@
+# MANIFEST
+
+## Stack
+
+Python 3.10+ · requests, python-docx, pymupdf · pytest + pytest-mock (offline tests) · Claude Code plugin (Sonnet orchestrator + Haiku subagents) · SQLite FTS5 vault index
+
+## Structure
+
+```
+plugin.json                            # Claude Code plugin manifest (skills + agents)
+
+skills/
+  research/SKILL.md                    # Sonnet orchestrator — 8-stage pipeline (resolve, search, fetch, media, summarize, classify, write, discover)
+  research-setup/SKILL.md              # Interactive setup wizard — vault config, tool detection, index build
+
+agents/
+  topic-resolver.md                    # Haiku agent — parses NL prompts into structured research plans
+  search-agent.md                      # Haiku agent — web search per topic, source quality scoring
+  classify-agent.md                    # Haiku agent — maps summaries to vault structure, tags, links
+  thread-discoverer.md                 # Haiku agent — scans batch results for follow-up research leads
+
+scripts/
+  config_manager.py                    # JSON-based vault config (replaces config.py + .env)
+  state.py                             # Pipeline state checkpoints with crash recovery
+  detect_tier.py                       # Infrastructure detection: Ollama, SearXNG, yt-dlp, Whisper
+  vault_index.py                       # SQLite FTS5 index for vault full-text search
+  fetch_and_clean.py                   # Jina Reader fetch + SHA-256 cache (7-day TTL, SSRF protection)
+  fetch_media.py                       # Media download (images, video via yt-dlp) + Whisper transcription + Obsidian embed rewriting
+  summarize.py                         # Article summarization via Ollama or file output for Haiku
+  extract_local.py                     # Local file text extraction (.pdf, .docx, .doc, .mp3)
+  search_searxng.py                    # SearXNG search backend — scored results for full tier
+  produce_output.py                    # Note -> downstream format via Ollama or file output for Claude Code
+  utils.py                             # Shared helpers: startup_checks, slugify
+  vault_lint.py                        # Frontmatter validation across vault
+  find_broken_links.py                 # Unresolved wikilink detection
+
+scripts/prompts/
+  README.md                            # Assembly pattern docs
+  summarize_fetch.txt                  # Summarization prompt for fetched articles
+  summarize.txt                        # Generic summarization
+  extract_claims.txt                   # Claim extraction
+  identify_stakeholders.txt            # Stakeholder identification
+  output_formats/                      # Downstream templates: web_article, video_script, briefing, etc.
+
+docker/
+  docker-compose.yml                   # SearXNG container (full tier infrastructure)
+  searxng/settings.yml                 # SearXNG engine config (Google, DuckDuckGo, Bing)
+
+template-vault/                        # Starter vault structure for new users (Inbox, Meta, Projects, Resources)
+
+tests/
+  conftest.py                          # Adds scripts/ to sys.path
+  test_*.py                            # One test module per script (all offline, no API keys)
+
+docs/
+  plans/                               # Design documents and implementation plans
+  handoff-token-efficiency.md          # Token optimization roadmap
+```
+
+## Key Relationships
+
+- `plugin.json` declares the plugin — lists skills and agents for Claude Code to discover
+- `research/SKILL.md` is the main entry point — dispatches all 4 agents and calls pipeline scripts via Bash
+- `state.py` provides crash recovery — the research skill checkpoints after every stage and can resume from last checkpoint
+- `config_manager.py` stores config in `{vault}/.research-workflow/config.json` — loaded at startup, replaces old `config.py` + `.env`
+- `vault_index.py` provides SQLite FTS5 search — used by classify-agent, thread-discoverer, and topic-resolver instead of globbing
+- `fetch_and_clean.py` + `fetch_media.py` are the fetch pipeline — URLs go through Jina Reader with cache, then media refs are downloaded separately
+- `summarize.py` branches on infrastructure: Ollama (mid/full tier) or file output for Haiku subagents (base tier)
+- `detect_tier.py` determines base/mid/full tier at startup — drives branching in summarize, search, and classify stages
+- Agent definitions in `agents/` are read by the skill at runtime and passed as prompts to Haiku subagents via the Task tool

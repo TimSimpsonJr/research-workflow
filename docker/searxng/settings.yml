@@ -1,0 +1,21 @@
+general:
+  instance_name: "Research Pipeline SearXNG"
+
+search:
+  safe_search: 0
+  default_lang: "en"
+
+server:
+  secret_key: "change-me-in-production"
+  bind_address: "0.0.0.0"
+
+engines:
+  - name: google
+    engine: google
+    shortcut: g
+  - name: duckduckgo
+    engine: duckduckgo
+    shortcut: ddg
+  - name: bing
+    engine: bing
+    shortcut: b
