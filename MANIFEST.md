@@ -12,8 +12,6 @@ plugin.json                            # Claude Code plugin manifest (skills + a
 skills/
   research/SKILL.md                    # Sonnet orchestrator — 8-stage pipeline (resolve, search, fetch, media, summarize, classify, write, discover)
   research-setup/SKILL.md              # Interactive setup wizard — vault config, tool detection, index build
-  research-search/SKILL.md             # Haiku subagent — web search & URL selection (legacy)
-  research-classify/SKILL.md           # Haiku subagent — vault placement, tags, wikilinks (legacy)
 
 agents/
   topic-resolver.md                    # Haiku agent — parses NL prompts into structured research plans
@@ -33,22 +31,15 @@ scripts/
   search_searxng.py                    # SearXNG search backend — scored results for full tier
   produce_output.py                    # Note -> downstream format via Ollama or file output for Claude Code
   utils.py                             # Shared helpers: startup_checks, slugify
-  ingest.py                            # URL -> vault inbox (raw archival via Jina Reader)
-  ingest_batch.py                      # Batch URL ingestion from file list
-  ingest_local.py                      # Local file ingestion (.docx/.doc/.pdf/.mp3 -> inbox)
   vault_lint.py                        # Frontmatter validation across vault
   find_broken_links.py                 # Unresolved wikilink detection
-  claude_pipe.py                       # Universal Claude API pipe (legacy — being phased out)
 
 scripts/prompts/
   README.md                            # Assembly pattern docs
   summarize_fetch.txt                  # Summarization prompt for fetched articles
   summarize.txt                        # Generic summarization
-  extract_transcript.txt               # Transcript claim extraction
   extract_claims.txt                   # Claim extraction
-  find_related.txt                     # Related note search prompt
   identify_stakeholders.txt            # Stakeholder identification
-  synthesize_topic.txt                 # Topic synthesis (MOC generation)
   output_formats/                      # Downstream templates: web_article, video_script, briefing, etc.
 
 docker/

@@ -1,31 +1,53 @@
 """
 produce_output.py — Research to Production Format
 
-Purpose: Transform any research or synthesis note into a specific downstream output format.
+Purpose: Transform any research or synthesis note into a specific downstream output format
+via Ollama, or prepare a file for Claude Code processing.
 
 Usage:
     python produce_output.py --file synthesis.md --format web_article
-    python produce_output.py --file synthesis.md --format video_script
+    python produce_output.py --file synthesis.md --format video_script --output-dir ./output
     python produce_output.py --file synthesis.md --format social_post --context "Twitter thread, 8 tweets"
     python produce_output.py --list-formats
+    python produce_output.py --file synthesis.md --format web_article --model llama3.2
 
-Dependencies: anthropic, rich, python-dotenv
+Dependencies: requests
 """
 
 import argparse
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from rich.console import Console
-from rich.table import Table
+import requests
 
-import config
-from claude_pipe import call_claude, estimate_cost
-from utils import slugify, startup_checks
+# ──────────────────────────────────────────────
+# Constants
+# ──────────────────────────────────────────────
 
-console = Console()
+SCRIPTS_DIR = Path(__file__).parent
+PROMPTS_PATH = SCRIPTS_DIR / "prompts"
+DATE_FORMAT = "%Y-%m-%d"
 
+
+# ──────────────────────────────────────────────
+# Helpers
+# ──────────────────────────────────────────────
+
+def _slugify(text: str, max_length: int = 60) -> str:
+    """Convert text to a URL-safe slug."""
+    text = text.lower()
+    text = re.sub(r"[^a-z0-9\s-]", "", text)
+    text = re.sub(r"[\s]+", "-", text.strip())
+    text = re.sub(r"-+", "-", text)
+    text = text[:max_length].strip("-")
+    return text
+
+
+# ──────────────────────────────────────────────
+# Pure functions (no external dependencies)
+# ──────────────────────────────────────────────
 
 def list_formats(formats_dir: Path) -> list[str]:
     """List all available format names by scanning the output_formats directory."""
@@ -49,46 +71,104 @@ def build_output_path(output_dir: Path, date_str: str, source_slug: str, fmt: st
     return output_dir / f"{source_slug}-{fmt}.md"
 
 
+# ──────────────────────────────────────────────
+# Ollama generation
+# ──────────────────────────────────────────────
+
+def generate_with_ollama(
+    message: str,
+    model: str,
+    ollama_url: str = "http://localhost:11434",
+) -> str | None:
+    """Send a prompt to Ollama's /api/generate endpoint and return the response text.
+
+    Returns:
+        The response text on success, None on any failure.
+    """
+    try:
+        response = requests.post(
+            f"{ollama_url}/api/generate",
+            json={
+                "model": model,
+                "prompt": message,
+                "stream": False,
+            },
+            timeout=300,
+        )
+        response.raise_for_status()
+        data = response.json()
+        return data.get("response", "")
+    except Exception as exc:
+        print(f"[produce_output] Ollama call failed: {exc}", file=sys.stderr)
+        return None
+
+
+# ──────────────────────────────────────────────
+# File output (for Claude Code processing)
+# ──────────────────────────────────────────────
+
+def prepare_file_for_claude(
+    message: str,
+    output_dir: Path,
+    source_slug: str,
+    fmt: str,
+) -> Path:
+    """Write content + prompt to a file for Claude Code to process.
+
+    Returns:
+        The path to the prepared file.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    file_path = output_dir / f"{source_slug}-{fmt}-prompt.md"
+    file_path.write_text(message, encoding="utf-8", newline="\n")
+    return file_path
+
+
+# ──────────────────────────────────────────────
+# CLI entry point
+# ──────────────────────────────────────────────
+
 def main():
-    parser = argparse.ArgumentParser(description="Transform research notes into production-ready formats.")
+    parser = argparse.ArgumentParser(
+        description="Transform research notes into production-ready formats."
+    )
     parser.add_argument("--file", help="Path to the research/synthesis note")
     parser.add_argument("--format", dest="fmt", help="Output format name")
     parser.add_argument("--context", help="Additional context appended to the prompt")
     parser.add_argument("--list-formats", action="store_true", help="List all available formats")
-    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be sent without calling the model")
+    parser.add_argument("--output-dir", help="Directory for output files (prints to stdout if omitted)")
+    parser.add_argument("--ollama-url", default="http://localhost:11434", help="Ollama API base URL")
+    parser.add_argument("--model", default="llama3.2", help="Ollama model name")
     args = parser.parse_args()
 
-    formats_dir = config.PROMPTS_PATH / "output_formats"
+    formats_dir = PROMPTS_PATH / "output_formats"
 
     if args.list_formats:
         formats = list_formats(formats_dir)
         if not formats:
-            console.print("[yellow]No formats found in prompts/output_formats/[/yellow]")
+            print("No formats found in prompts/output_formats/")
         else:
-            table = Table(title="Available Output Formats")
-            table.add_column("Format", style="cyan")
+            print("Available Output Formats:")
             for fmt in formats:
-                table.add_row(fmt)
-            console.print(table)
+                print(f"  {fmt}")
         return
 
     if not args.file or not args.fmt:
-        console.print("[red]--file and --format are required (or use --list-formats)[/red]")
+        print("Error: --file and --format are required (or use --list-formats)", file=sys.stderr)
         sys.exit(1)
-
-    startup_checks()
 
     file_path = Path(args.file)
     if not file_path.exists():
-        console.print(f"[red]File not found: {file_path}[/red]")
+        print(f"Error: File not found: {file_path}", file=sys.stderr)
         sys.exit(1)
 
     try:
         format_prompt = load_format_prompt(args.fmt, formats_dir)
     except FileNotFoundError as e:
-        console.print(f"[red]{e}[/red]")
+        print(f"Error: {e}", file=sys.stderr)
         available = list_formats(formats_dir)
-        console.print(f"Available formats: {', '.join(available)}")
+        print(f"Available formats: {', '.join(available)}", file=sys.stderr)
         sys.exit(1)
 
     if args.context:
@@ -98,27 +178,32 @@ def main():
     message = f"{content}\n\n---\n{format_prompt}"
 
     if args.dry_run:
-        console.print(f"[yellow]Dry run — {len(message)} chars, format: {args.fmt}[/yellow]")
+        print(f"Dry run -- {len(message)} chars, format: {args.fmt}")
         return
 
-    with console.status(f"Generating {args.fmt} with Claude..."):
-        response_text, usage = call_claude(message, model=config.CLAUDE_MODEL_HEAVY, max_tokens=config.CLAUDE_MAX_TOKENS)
+    # Try Ollama first, fall back to file output
+    response_text = generate_with_ollama(message, args.model, args.ollama_url)
 
-    cost = estimate_cost(usage["input_tokens"], usage["output_tokens"], config.CLAUDE_MODEL_HEAVY)
-    console.print(f"[dim]Tokens: {usage['input_tokens']} in / {usage['output_tokens']} out | Est. cost: ${cost:.4f}[/dim]")
+    if response_text is not None:
+        # Ollama succeeded — write or print
+        now = datetime.now(timezone.utc)
+        date_str = now.strftime(DATE_FORMAT)
+        source_slug = _slugify(file_path.stem)
 
-    now = datetime.now(timezone.utc)
-    date_str = now.strftime(config.DATE_FORMAT)
-    source_slug = slugify(file_path.stem)
-
-    output_dir = config.OUTPUT_PATH if config.OUTPUT_PATH and config.OUTPUT_PATH.exists() else None
-
-    if output_dir:
-        out_path = build_output_path(output_dir, date_str, source_slug, args.fmt)
-        out_path.write_text(response_text, encoding="utf-8", newline="\n")
-        console.print(f"[green]Output written:[/green] {out_path}")
+        if args.output_dir:
+            output_dir = Path(args.output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            out_path = build_output_path(output_dir, date_str, source_slug, args.fmt)
+            out_path.write_text(response_text, encoding="utf-8", newline="\n")
+            print(f"Output written: {out_path}")
+        else:
+            print(response_text)
     else:
-        console.print(response_text)
+        # Ollama unavailable or failed — fall back to file output
+        source_slug = _slugify(file_path.stem)
+        output_dir = Path(args.output_dir) if args.output_dir else Path(".")
+        prepared_path = prepare_file_for_claude(message, output_dir, source_slug, args.fmt)
+        print(f"File prepared at {prepared_path} -- process with Claude Code")
 
 
 if __name__ == "__main__":
