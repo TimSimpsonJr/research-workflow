@@ -1,0 +1,9 @@
+Summarize this article for a research database. Output valid JSON only, no markdown fences.
+
+Required fields:
+- "summary": 3-5 sentence distillation of key facts and main argument (under 500 tokens)
+- "source_type": one of "government", "journalism", "academic", "advocacy", "other"
+- "key_entities": list of named entities (people, organizations, legislation, places)
+- "key_claims": list of specific factual claims made in the article
+
+Focus on facts, not opinion. Preserve specific numbers, dates, and names.
