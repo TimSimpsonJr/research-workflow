@@ -168,7 +168,11 @@ def main():
         format_prompt += f"\n\nAdditional context for this output: {args.context}"
 
     content = file_path.read_text(encoding="utf-8", errors="ignore")
+    vault_rules_path = PROMPTS_PATH / "vault_rules.txt"
+    vault_rules = vault_rules_path.read_text(encoding="utf-8").strip() if vault_rules_path.exists() else ""
     message = f"{content}\n\n---\n{format_prompt}"
+    if vault_rules:
+        message += f"\n\n---\n{vault_rules}"
 
     if args.dry_run:
         print(f"Dry run -- {len(message)} chars, format: {args.fmt}")
