@@ -25,7 +25,7 @@ scripts/
   detect_tier.py                 # Infrastructure detection: Ollama, SearXNG, yt-dlp, Whisper
   vault_index.py                 # SQLite FTS5 index for vault full-text search
   fetch_and_clean.py             # Jina Reader fetch + SHA-256 cache (7-day TTL, SSRF protection)
-  fetch_media.py                 # Media download (images, PDFs) + Obsidian embed rewriting
+  fetch_media.py                 # Media download (images, PDFs, video via yt-dlp) + Whisper transcription + Obsidian embed rewriting
   summarize.py                   # Article summarization via Ollama or file output for Haiku
   extract_local.py               # Local file text extraction (.pdf, .docx, .doc, .mp3)
   claude_pipe.py                 # Universal Claude API pipe (legacy — being phased out)
@@ -35,7 +35,7 @@ scripts/
   ingest_local.py                # Local file ingestion (.docx/.doc/.pdf/.mp3 → inbox)
   vault_lint.py                  # Frontmatter validation across vault
   find_broken_links.py           # Unresolved wikilink detection
-  produce_output.py              # Note → downstream format (blog, video script, briefing)
+  produce_output.py              # Note → downstream format via Ollama or file output for Claude Code
 
 scripts/prompts/
   README.md                      # Assembly pattern docs

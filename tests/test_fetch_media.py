@@ -3,7 +3,7 @@
 import json
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 
 
 def test_extract_media_refs_finds_images():
@@ -281,3 +281,264 @@ def test_rewrite_media_refs_preserves_non_media_content():
     assert "Some text" in updated
     assert "More text" in updated
     assert "![[assets/topic/photo.png]]" in updated
+
+
+# ──────────────────────────────────────────────
+# _extract_video_id tests
+# ──────────────────────────────────────────────
+
+def test_extract_video_id_youtube_watch():
+    from fetch_media import _extract_video_id
+    assert _extract_video_id("https://www.youtube.com/watch?v=abc123") == "abc123"
+
+
+def test_extract_video_id_youtube_short():
+    from fetch_media import _extract_video_id
+    assert _extract_video_id("https://youtu.be/abc123") == "abc123"
+
+
+def test_extract_video_id_vimeo():
+    from fetch_media import _extract_video_id
+    assert _extract_video_id("https://vimeo.com/123456") == "123456"
+
+
+def test_extract_video_id_fallback():
+    from fetch_media import _extract_video_id
+    result = _extract_video_id("https://example.com/somevideo.mp4")
+    assert result == "somevideo"
+
+
+# ──────────────────────────────────────────────
+# download_video tests
+# ──────────────────────────────────────────────
+
+def test_download_video_extracts_audio(tmp_path):
+    from fetch_media import download_video
+    assets_dir = tmp_path / "assets"
+
+    def fake_run(cmd, **kwargs):
+        # Simulate yt-dlp creating the output file
+        target_dir = assets_dir / "test"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        mp3_path = target_dir / "abc123.mp3"
+        mp3_path.write_bytes(b"fake mp3 audio data")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("fetch_media.subprocess.run", side_effect=fake_run) as mock_run:
+        result = download_video(
+            url="https://youtube.com/watch?v=abc123",
+            assets_dir=assets_dir,
+            topic_slug="test",
+        )
+    assert mock_run.called
+    # yt-dlp should be called with audio-only flags
+    call_args = mock_run.call_args[0][0]
+    assert call_args[0] == "yt-dlp"
+    assert "-x" in call_args
+    assert "--audio-format" in call_args
+    assert "mp3" in call_args
+    # Result should be valid
+    assert result is not None
+    assert result["url"] == "https://youtube.com/watch?v=abc123"
+    assert result["type"] == "video"
+    assert result["size_bytes"] == 19  # len(b"fake mp3 audio data")
+    assert result["local_path"].endswith("abc123.mp3")
+
+
+def test_download_video_writes_meta_sidecar(tmp_path):
+    from fetch_media import download_video
+    assets_dir = tmp_path / "assets"
+
+    def fake_run(cmd, **kwargs):
+        target_dir = assets_dir / "test"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / "abc123.mp3").write_bytes(b"audio")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("fetch_media.subprocess.run", side_effect=fake_run):
+        result = download_video(
+            url="https://youtube.com/watch?v=abc123",
+            assets_dir=assets_dir,
+            topic_slug="test",
+            run_id="run-42",
+        )
+    assert result is not None
+    meta_path = assets_dir / "test" / "abc123.mp3.meta"
+    assert meta_path.exists()
+    meta = json.loads(meta_path.read_text())
+    assert meta["source_url"] == "https://youtube.com/watch?v=abc123"
+    assert meta["research_run"] == "run-42"
+    assert meta["content_type"] == "audio/mpeg"
+    assert "downloaded_at" in meta
+    assert "size_bytes" in meta
+
+
+def test_download_video_returns_none_on_ytdlp_failure(tmp_path):
+    from fetch_media import download_video
+    with patch("fetch_media.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+        result = download_video(
+            url="https://youtube.com/watch?v=abc123",
+            assets_dir=tmp_path / "assets",
+            topic_slug="test",
+        )
+    assert result is None
+
+
+def test_download_video_returns_none_on_exception(tmp_path):
+    from fetch_media import download_video
+    with patch("fetch_media.subprocess.run", side_effect=Exception("boom")):
+        result = download_video(
+            url="https://youtube.com/watch?v=abc123",
+            assets_dir=tmp_path / "assets",
+            topic_slug="test",
+        )
+    assert result is None
+
+
+def test_download_video_returns_none_when_no_output_file(tmp_path):
+    from fetch_media import download_video
+    with patch("fetch_media.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        # yt-dlp succeeds but no file is written
+        result = download_video(
+            url="https://youtube.com/watch?v=abc123",
+            assets_dir=tmp_path / "assets",
+            topic_slug="test",
+        )
+    assert result is None
+
+
+def test_download_video_youtu_be(tmp_path):
+    from fetch_media import download_video
+    assets_dir = tmp_path / "assets"
+
+    def fake_run(cmd, **kwargs):
+        target_dir = assets_dir / "test"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / "xyz789.mp3").write_bytes(b"audio")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("fetch_media.subprocess.run", side_effect=fake_run):
+        result = download_video(
+            url="https://youtu.be/xyz789",
+            assets_dir=assets_dir,
+            topic_slug="test",
+        )
+    assert result is not None
+    assert result["local_path"].endswith("xyz789.mp3")
+
+
+def test_download_video_vimeo(tmp_path):
+    from fetch_media import download_video
+    assets_dir = tmp_path / "assets"
+
+    def fake_run(cmd, **kwargs):
+        target_dir = assets_dir / "test"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        (target_dir / "999888.mp3").write_bytes(b"audio")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("fetch_media.subprocess.run", side_effect=fake_run):
+        result = download_video(
+            url="https://vimeo.com/999888",
+            assets_dir=assets_dir,
+            topic_slug="test",
+        )
+    assert result is not None
+    assert result["local_path"].endswith("999888.mp3")
+
+
+# ──────────────────────────────────────────────
+# transcribe_audio tests
+# ──────────────────────────────────────────────
+
+def test_transcribe_audio_calls_whisper(tmp_path):
+    from fetch_media import transcribe_audio
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake audio")
+
+    def fake_run(cmd, **kwargs):
+        # Simulate whisper creating the output .txt file
+        txt_path = tmp_path / "audio.txt"
+        txt_path.write_text("Transcribed text here", encoding="utf-8")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("fetch_media.subprocess.run", side_effect=fake_run) as mock_run:
+        result = transcribe_audio(audio_file)
+    assert result == "Transcribed text here"
+    assert mock_run.called
+    call_args = mock_run.call_args[0][0]
+    assert call_args[0] == "whisper"
+    assert "--output_format" in call_args
+    assert "txt" in call_args
+
+
+def test_transcribe_audio_with_custom_model(tmp_path):
+    from fetch_media import transcribe_audio
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake audio")
+
+    def fake_run(cmd, **kwargs):
+        txt_path = tmp_path / "audio.txt"
+        txt_path.write_text("transcript", encoding="utf-8")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("fetch_media.subprocess.run", side_effect=fake_run) as mock_run:
+        result = transcribe_audio(audio_file, model="large")
+    assert result == "transcript"
+    call_args = mock_run.call_args[0][0]
+    assert "--model" in call_args
+    model_idx = call_args.index("--model")
+    assert call_args[model_idx + 1] == "large"
+
+
+def test_transcribe_audio_returns_none_on_whisper_failure(tmp_path):
+    from fetch_media import transcribe_audio
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake audio")
+    with patch("fetch_media.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+        result = transcribe_audio(audio_file)
+    assert result is None
+
+
+def test_transcribe_audio_returns_none_on_exception(tmp_path):
+    from fetch_media import transcribe_audio
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake audio")
+    with patch("fetch_media.subprocess.run", side_effect=Exception("boom")):
+        result = transcribe_audio(audio_file)
+    assert result is None
+
+
+def test_transcribe_audio_returns_none_when_file_missing():
+    from fetch_media import transcribe_audio
+    result = transcribe_audio(Path("/nonexistent/audio.mp3"))
+    assert result is None
+
+
+def test_transcribe_audio_returns_none_when_no_output(tmp_path):
+    from fetch_media import transcribe_audio
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake audio")
+    with patch("fetch_media.subprocess.run") as mock_run:
+        # Whisper succeeds but no .txt file is written
+        mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        result = transcribe_audio(audio_file)
+    assert result is None
+
+
+def test_transcribe_audio_returns_none_for_empty_transcript(tmp_path):
+    from fetch_media import transcribe_audio
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake audio")
+
+    def fake_run(cmd, **kwargs):
+        txt_path = tmp_path / "audio.txt"
+        txt_path.write_text("   \n  ", encoding="utf-8")
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    with patch("fetch_media.subprocess.run", side_effect=fake_run):
+        result = transcribe_audio(audio_file)
+    assert result is None
