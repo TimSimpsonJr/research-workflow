@@ -235,3 +235,53 @@ def test_process_urls_expired_cache_refetches(tmp_path):
     mock_fetch.assert_called_once()
     assert fetched[0]["cache_hit"] is False
     assert fetched[0]["content"] == "refreshed content"
+
+
+# ── process_urls_parallel ──────────────────────
+
+def test_process_urls_parallel_fetches_concurrently(tmp_path):
+    from fetch_and_clean import process_urls_parallel
+    urls = [{"url": f"https://example.com/{i}"} for i in range(5)]
+    with patch("fetch_and_clean.fetch_url", return_value=("content", "title", "jina")):
+        fetched, failed = process_urls_parallel(
+            urls=urls, cache_dir=tmp_path, ttl_days=7,
+            jina_api_key=None, max_workers=3,
+        )
+    assert len(fetched) == 5
+    assert len(failed) == 0
+
+
+def test_process_urls_parallel_handles_mixed_success_failure(tmp_path):
+    from fetch_and_clean import process_urls_parallel
+    urls = [{"url": "https://good.com"}, {"url": "https://bad.com"}]
+
+    def mock_fetch(url, key=None):
+        if "bad" in url:
+            raise RuntimeError("fail")
+        return ("content", "title", "jina")
+
+    with patch("fetch_and_clean.fetch_url", side_effect=mock_fetch):
+        fetched, failed = process_urls_parallel(
+            urls=urls, cache_dir=tmp_path, ttl_days=7,
+            jina_api_key=None, max_workers=2,
+        )
+    assert len(fetched) == 1
+    assert len(failed) == 1
+
+
+def test_process_urls_parallel_respects_cache(tmp_path):
+    from fetch_and_clean import process_urls_parallel, save_cache, url_cache_key
+    from datetime import datetime, timezone
+    url = "https://cached.com/article"
+    cache_key = url_cache_key(url)
+    save_cache(tmp_path, cache_key, {
+        "url": url, "content": "cached", "title": "Cached",
+        "fetch_method": "jina", "fetched_at": datetime.now(timezone.utc).isoformat(),
+    })
+    with patch("fetch_and_clean.fetch_url") as mock:
+        fetched, _ = process_urls_parallel(
+            urls=[{"url": url}], cache_dir=tmp_path, ttl_days=7,
+            jina_api_key=None, max_workers=2,
+        )
+    mock.assert_not_called()
+    assert fetched[0]["cache_hit"] is True
