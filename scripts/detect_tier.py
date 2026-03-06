@@ -54,14 +54,24 @@ def recommend_model(ram_gb: float, vram_gb: float) -> dict:
 
 
 def check_searxng(url: str | None) -> dict:
-    """Check if SearXNG is reachable at the given URL."""
+    """Check if SearXNG is reachable and its JSON API is enabled."""
     if not url:
         return {"available": False, "url": None}
+    base = url.rstrip("/")
     try:
-        resp = requests.get(f"{url.rstrip('/')}/healthz", timeout=5)
-        return {"available": resp.status_code == 200, "url": url}
+        resp = requests.get(f"{base}/healthz", timeout=5)
+        if resp.status_code != 200:
+            return {"available": False, "url": url, "error": f"healthz returned {resp.status_code}"}
+    except Exception as e:
+        return {"available": False, "url": url, "error": str(e)}
+    # Verify JSON format is enabled (SearXNG returns 403 if json not in formats)
+    try:
+        resp = requests.get(f"{base}/search", params={"q": "test", "format": "json"}, timeout=10)
+        if resp.status_code == 403:
+            return {"available": False, "url": url, "error": "JSON format disabled in SearXNG settings. Add 'json' to search.formats in settings.yml"}
+        return {"available": True, "url": url}
     except Exception:
-        return {"available": False, "url": url}
+        return {"available": True, "url": url}  # healthz passed, JSON check inconclusive
 
 
 def check_ytdlp() -> dict:

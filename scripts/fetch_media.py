@@ -43,6 +43,9 @@ VIDEO_DOMAINS = {"youtube.com", "www.youtube.com", "youtu.be",
                  "vimeo.com", "www.vimeo.com"}
 
 DEFAULT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
+_DOWNLOAD_HEADERS = {
+    "User-Agent": "research-workflow/2.0 (media downloader; +https://github.com)",
+}
 
 
 # ──────────────────────────────────────────────
@@ -167,7 +170,7 @@ def download_media_file(
     """
     try:
         validate_url(url)
-        with requests.get(url, stream=True, timeout=30) as resp:
+        with requests.get(url, stream=True, timeout=30, headers=_DOWNLOAD_HEADERS) as resp:
             resp.raise_for_status()
 
             # Check Content-Length if available
@@ -396,20 +399,23 @@ def rewrite_media_refs(content: str, manifest: list[dict]) -> str:
     result = content
 
     for url, local_path in url_map.items():
+        embed = f'![[{local_path}]]'
         # Replace ![alt](url) with ![[local_path]]
+        # Use lambda replacement to avoid re.sub interpreting backslashes
+        # in Windows paths (e.g. \Users -> \U escape sequence)
         result = re.sub(
             r'!\[[^\]]*\]\(' + re.escape(url) + r'\)',
-            f'![[{local_path}]]',
+            lambda _: embed,
             result,
         )
         # Replace [text](url) with ![[local_path]]
         result = re.sub(
             r'(?<!!)\[[^\]]*\]\(' + re.escape(url) + r'\)',
-            f'![[{local_path}]]',
+            lambda _: embed,
             result,
         )
         # Replace bare URLs
-        result = result.replace(url, f'![[{local_path}]]')
+        result = result.replace(url, embed)
 
     return result
 

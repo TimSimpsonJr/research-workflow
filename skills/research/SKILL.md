@@ -628,6 +628,94 @@ After all notes are written:
 
 ---
 
+## Stage 8d: Wikilink Scan
+
+After all notes and MOCs are written, scan for wikilink opportunities between the new notes and existing project notes.
+
+### 8d-i. Refresh vault index
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from vault_index import update_index
+from pathlib import Path
+stats = update_index(Path('VAULT'))
+print(json.dumps(stats))
+"
+```
+
+This ensures the newly written notes are indexed before the scanner queries the vault.
+
+### 8d-ii. Determine project folder
+
+From the written notes list, extract the common parent folder. For example, if notes were written to `Projects/Activism/BJU/Bob Jones University.md` and `Projects/Activism/BJU/GRACE Report on Bob Jones University.md`, the project folder is `Projects/Activism/BJU`.
+
+### 8d-iii. Dispatch wikilink-scanner agent
+
+Read the agent definition: `REPO/agents/wikilink-scanner.md`
+
+Load the written notes list:
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import load_stage_output
+from pathlib import Path
+written = load_stage_output(Path('STATE_DIR'), 'written_notes')
+print(json.dumps(written))
+"
+```
+
+Dispatch via the Task tool:
+- `subagent_type`: `general-purpose`
+- `model`: `haiku`
+- `prompt`: The full contents of `agents/wikilink-scanner.md`, followed by a `---` separator, followed by:
+
+```json
+{
+  "new_notes": [{list of {path, title} from written_notes}],
+  "project_folder": "{project folder vault-relative path}",
+  "vault_root": "VAULT",
+  "scripts_dir": "SCRIPTS"
+}
+```
+
+### 8d-iv. Parse and apply edits
+
+The agent returns a JSON object with `edits` and `stats`.
+
+For each edit in the `edits` array:
+1. Read the target file using the Read tool
+2. Find the first occurrence of `edit.find` in the file content, using `edit.context` for disambiguation if needed
+3. Replace it with `edit.replace` using the Edit tool
+4. If the `find` text is not found (perhaps already wikilinked or content changed), skip it and log a warning
+
+### 8d-v. Report results
+
+Log the results:
+```
+Wikilink scan: {stats.total_edits} edits applied
+  New notes: +{stats.wikilinks_in_new_notes} wikilinks
+  Existing notes: +{stats.wikilinks_in_existing_notes} wikilinks to new notes
+```
+
+If no edits were needed, log: `Wikilink scan: no new wikilinks needed.`
+
+### 8d-vi. Update state
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import update_stage
+from pathlib import Path
+update_stage(Path('STATE_DIR'), 'discover')
+"
+```
+
+---
+
 ## Stage 9: Discover
 
 ### 9a. Dispatch thread-discoverer agent
