@@ -1,0 +1,13 @@
+Merge the partial summaries above into a single unified summary. Output valid JSON only, no markdown fences.
+
+Required fields:
+- "summary": 3-5 sentence distillation covering the ENTIRE article, not just one section (under 500 tokens)
+- "source_type": one of "government", "journalism", "academic", "advocacy", "other"
+- "key_entities": deduplicated list of all named entities across all chunks (people, organizations, legislation, places)
+- "key_claims": deduplicated list of the most significant factual claims across all chunks (keep the strongest 5-10)
+
+Rules:
+- Combine overlapping information — do not repeat the same fact twice.
+- If chunks disagree on source_type, pick the one that best describes the article as a whole.
+- Preserve specific numbers, dates, and names from the chunk summaries.
+- The final summary should read as a coherent whole, not a list of chunk summaries.

@@ -288,7 +288,7 @@ For small batches (5 or fewer topics), dispatch all search agents in parallel by
 
 If `SEARXNG_AVAILABLE` is true, also run for each topic via Bash:
 ```bash
-python "SCRIPTS/search_searxng.py" --query "{topic}" --output "STATE_DIR/searxng_{index}.json"
+python "SCRIPTS/search_searxng.py" --query "{topic}" --url "SEARXNG_URL" --output "STATE_DIR/searxng_{index}.json"
 ```
 
 Merge SearXNG results into the search agent results, deduplicating by URL.

@@ -22,10 +22,22 @@ def _atomic_write(path: Path, data: dict) -> None:
 
 
 def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
-    """Create a new run. Raises FileExistsError if a run is active."""
+    """Create a new run. Archives any completed previous run automatically.
+
+    Raises FileExistsError only if an *incomplete* run is still active.
+    Completed runs are archived to history/ and a fresh run starts.
+    """
     run_file = state_dir / CURRENT_RUN_FILE
     if run_file.exists():
-        raise FileExistsError(f"Active run exists: {run_file}")
+        existing = json.loads(run_file.read_text(encoding="utf-8"))
+        if existing.get("completed_at"):
+            # Previous run finished — archive it and continue
+            _archive_run(state_dir)
+        else:
+            raise FileExistsError(
+                f"Active incomplete run exists: {existing.get('run_id', 'unknown')}. "
+                f"Resume, restart, or abandon it first."
+            )
     state_dir.mkdir(parents=True, exist_ok=True)
     run = {
         "run_id": run_id,

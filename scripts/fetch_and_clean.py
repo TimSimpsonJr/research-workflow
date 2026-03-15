@@ -89,6 +89,25 @@ def normalize_url(url: str) -> str:
     return url.rstrip("/").lower()
 
 
+def _normalize_url_items(urls: list) -> list[dict]:
+    """Normalize URL entries to dicts with a 'url' key.
+
+    Accepts mixed input:
+    - Strings: "https://example.com" -> {"url": "https://example.com"}
+    - Dicts with 'url' key: passed through as-is
+    """
+    result: list[dict] = []
+    for item in urls:
+        if isinstance(item, str):
+            result.append({"url": item})
+        elif isinstance(item, dict) and "url" in item:
+            result.append(item)
+        else:
+            print(f"[fetch_and_clean] WARNING: skipping unrecognized URL entry: {item!r}",
+                  file=sys.stderr)
+    return result
+
+
 def deduplicate_urls(urls: list[dict]) -> list[dict]:
     """Remove duplicate URLs (case-insensitive, trailing-slash agnostic). Preserves order."""
     seen: set[str] = set()
@@ -368,7 +387,8 @@ def main() -> None:
         sys.exit(1)
 
     search_context: dict = json.loads(input_path.read_text(encoding="utf-8"))
-    urls = deduplicate_urls(search_context.get("selected_urls", []))
+    raw_urls = search_context.get("selected_urls", [])
+    urls = deduplicate_urls(_normalize_url_items(raw_urls))
 
     if args.dry_run:
         print(f"[fetch_and_clean] Dry run — {len(urls)} URL(s) would be fetched:", file=sys.stderr)

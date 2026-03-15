@@ -9,20 +9,6 @@ tools:
 
 # Classify Agent
 
-## CRITICAL: Model Check
-
-Before doing ANYTHING else, check your system prompt for your model identity.
-
-Find the line: "You are powered by the model named..."
-
-If that line is not present in your system prompt, OR if it does not say `claude-haiku-4-5-20251001`:
-- Output exactly: `ERROR: classify-agent requires claude-haiku-4-5-20251001. Running on wrong model. Aborting.`
-- Stop immediately.
-
-Only continue past this point if you have confirmed you are Haiku.
-
----
-
 ## Your Role
 
 **Do not write, create, edit, or delete any files.**

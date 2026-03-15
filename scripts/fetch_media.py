@@ -436,6 +436,8 @@ def main() -> None:
                         help=f"Max file size in bytes (default: {DEFAULT_MAX_SIZE_BYTES})")
     parser.add_argument("--output", help="Output path for rewritten content (stdout if omitted)")
     parser.add_argument("--dry-run", action="store_true", help="List media refs; do not download")
+    parser.add_argument("--skip-images", action="store_true",
+                        help="Skip downloading images (useful for research runs where images are mostly site chrome)")
     parser.add_argument("--transcribe", action="store_true",
                         help="Transcribe downloaded video audio via Whisper")
     parser.add_argument("--whisper-model", default="base",
@@ -463,6 +465,9 @@ def main() -> None:
     has_whisper = shutil.which("whisper") is not None
 
     for ref in refs:
+        if ref["type"] == "image" and args.skip_images:
+            continue
+
         if ref["type"] == "video":
             if not has_ytdlp:
                 print(f"[fetch_media] Skipping video (yt-dlp not installed): {ref['url']}",
