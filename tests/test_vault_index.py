@@ -103,3 +103,50 @@ def test_note_exists_by_title(tmp_path):
     build_index(tmp_path)
     assert note_exists(tmp_path, "Automatic License Plate Readers") is True
     assert note_exists(tmp_path, "Quantum Computing") is False
+
+
+def test_search_matches_deep_body_text(tmp_path):
+    """Full body is indexed, not just the first 500 chars."""
+    from vault_index import build_index, search
+    filler = "unrelated filler words " * 100  # push past 500 chars
+    body = f"{filler}\nThe city deployed automatic license plate readers on Main Street."
+    _create_note(tmp_path, "deep.md", body)
+    build_index(tmp_path)
+    results = search(tmp_path, "license plate")
+    assert len(results) == 1
+    assert "deep.md" in results[0]["path"]
+
+
+def test_prefix_query_matches_morphological_variants(tmp_path):
+    """Prefix matching: 'surveil' matches 'surveillance', 'surveilling', etc."""
+    from vault_index import build_index, search
+    _create_note(tmp_path, "a.md", "Police surveillance program launched")
+    _create_note(tmp_path, "b.md", "Officers surveilling the intersection")
+    _create_note(tmp_path, "c.md", "Nothing relevant here at all")
+    build_index(tmp_path)
+    results = search(tmp_path, "surveil")
+    paths = [r["path"] for r in results]
+    assert "a.md" in paths
+    assert "b.md" in paths
+    assert "c.md" not in paths
+
+
+def test_title_match_ranks_above_body_match(tmp_path):
+    """BM25 weights: title match (10x) should outrank a body-only match (1x)."""
+    from vault_index import build_index, search
+    _create_note(tmp_path, "title_hit.md", "Unrelated body text",
+                 frontmatter="title: ALPR Surveillance Overview")
+    _create_note(tmp_path, "body_hit.md",
+                 "This note mentions ALPR surveillance once in passing.")
+    build_index(tmp_path)
+    results = search(tmp_path, "ALPR surveillance")
+    assert len(results) == 2
+    assert "title_hit.md" in results[0]["path"]
+
+
+def test_search_empty_query_returns_empty(tmp_path):
+    from vault_index import build_index, search
+    _create_note(tmp_path, "note.md", "Some content")
+    build_index(tmp_path)
+    assert search(tmp_path, "") == []
+    assert search(tmp_path, "   ") == []

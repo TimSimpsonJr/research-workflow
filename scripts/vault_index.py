@@ -34,24 +34,25 @@ def _init_tables(conn: sqlite3.Connection) -> None:
             title TEXT NOT NULL DEFAULT '',
             tags TEXT NOT NULL DEFAULT '',
             excerpt TEXT NOT NULL DEFAULT '',
+            body TEXT NOT NULL DEFAULT '',
             mtime REAL NOT NULL
         );
         CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-            title, tags, excerpt, content=notes, content_rowid=rowid
+            title, tags, body, content=notes, content_rowid=rowid
         );
         CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-            INSERT INTO notes_fts(rowid, title, tags, excerpt)
-            VALUES (new.rowid, new.title, new.tags, new.excerpt);
+            INSERT INTO notes_fts(rowid, title, tags, body)
+            VALUES (new.rowid, new.title, new.tags, new.body);
         END;
         CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-            INSERT INTO notes_fts(notes_fts, rowid, title, tags, excerpt)
-            VALUES ('delete', old.rowid, old.title, old.tags, old.excerpt);
+            INSERT INTO notes_fts(notes_fts, rowid, title, tags, body)
+            VALUES ('delete', old.rowid, old.title, old.tags, old.body);
         END;
         CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-            INSERT INTO notes_fts(notes_fts, rowid, title, tags, excerpt)
-            VALUES ('delete', old.rowid, old.title, old.tags, old.excerpt);
-            INSERT INTO notes_fts(rowid, title, tags, excerpt)
-            VALUES (new.rowid, new.title, new.tags, new.excerpt);
+            INSERT INTO notes_fts(notes_fts, rowid, title, tags, body)
+            VALUES ('delete', old.rowid, old.title, old.tags, old.body);
+            INSERT INTO notes_fts(rowid, title, tags, body)
+            VALUES (new.rowid, new.title, new.tags, new.body);
         END;
     """)
 
@@ -95,8 +96,8 @@ def _index_file(conn: sqlite3.Connection, vault_root: Path, rel_path: str, mtime
     body = _body_text(text)
     excerpt = body[:EXCERPT_LENGTH]
     conn.execute(
-        "INSERT OR REPLACE INTO notes (path, title, tags, excerpt, mtime) VALUES (?, ?, ?, ?, ?)",
-        (rel_path, title, tags, excerpt, mtime),
+        "INSERT OR REPLACE INTO notes (path, title, tags, excerpt, body, mtime) VALUES (?, ?, ?, ?, ?, ?)",
+        (rel_path, title, tags, excerpt, body, mtime),
     )
 
 
@@ -156,17 +157,27 @@ def update_index(vault_root: Path) -> dict:
     return stats
 
 
+def _prepare_query(query: str) -> str:
+    """Add prefix matching to each term for broader recall."""
+    tokens = query.strip().split()
+    return " ".join(f"{t}*" for t in tokens if t)
+
+
 def search(vault_root: Path, query: str, limit: int = 20) -> list[dict]:
     """Full-text search. Returns list of {path, title, tags, excerpt, rank}."""
+    prepared = _prepare_query(query)
+    if not prepared:
+        return []
     conn = _connect(vault_root)
     rows = conn.execute(
-        """SELECT n.path, n.title, n.tags, n.excerpt, rank
+        """SELECT n.path, n.title, n.tags, n.excerpt,
+                  bm25(notes_fts, 10.0, 5.0, 1.0) AS rank
            FROM notes_fts f
            JOIN notes n ON n.rowid = f.rowid
            WHERE notes_fts MATCH ?
            ORDER BY rank
            LIMIT ?""",
-        (query, limit),
+        (prepared, limit),
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
