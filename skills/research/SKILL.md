@@ -46,35 +46,56 @@ Parse the JSON output. Extract and store:
 
 If the command prints `ERROR:`, output the error and stop.
 
-### 0b. Detect tier
+### 0b. Detect tier (with auto-start and degradation alert)
 
 Run via Bash:
 ```bash
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from detect_tier import check_ollama, check_searxng, check_ytdlp, check_whisper, detect_tier
-searxng_url = SEARXNG_URL
-ollama = check_ollama()
-searxng = check_searxng(searxng_url)
-ytdlp = check_ytdlp()
-whisper = check_whisper()
-tier = detect_tier(searxng_url)
-print(json.dumps({
-    'tier': tier,
-    'ollama_available': ollama.get('running', False),
-    'ollama_models': ollama.get('models', []),
-    'searxng_available': searxng.get('available', False),
-    'ytdlp_available': ytdlp.get('installed', False),
-    'whisper_available': whisper.get('installed', False),
-    'recommended_model': ollama.get('models', [None])[0]
-}))
+from detect_tier import build_tier_report
+from pathlib import Path
+report = build_tier_report(SEARXNG_URL, Path('REPO'))
+print(json.dumps(report))
 "
 ```
 
-Substitute `SEARXNG_URL` with the value from config (Python `None` if null, or the string URL).
+Substitute `SEARXNG_URL` with the value from config (Python `None` if null, or the quoted string URL). Substitute `REPO` with the repo root path.
 
-Parse the JSON. Store `TIER`, `OLLAMA_AVAILABLE`, `RECOMMENDED_MODEL`, `SEARXNG_AVAILABLE`, `YTDLP_AVAILABLE`, `WHISPER_AVAILABLE`.
+Parse the JSON. Extract and store:
+- `TIER` = `report.tier`
+- `OLLAMA_AVAILABLE` = `report.components.ollama.status == "ok"`
+- `RECOMMENDED_MODEL` = `report.components.ollama.model` (if present)
+- `SEARXNG_AVAILABLE` = `report.components.searxng.status == "ok"`
+- `YTDLP_AVAILABLE` = `report.components.ytdlp.status == "ok"`
+- `WHISPER_AVAILABLE` = `report.components.whisper.status == "ok"`
+
+**If `report.degraded` is true**, show the user a tier alert:
+
+```
+⚠️  Running at {TIER} tier (max available: full)
+
+Missing:
+{for each item in missing_for_full:}
+  - {item}
+{end}
+
+Impact:
+  - mid tier: No SearXNG search merging — search uses Claude WebSearch only
+  - base tier: No local summarization — all summarization uses Haiku (higher API cost)
+
+Continue at {TIER} tier? [yes / fix and retry / cancel]
+```
+
+Wait for user response:
+- **yes:** Continue with the degraded tier.
+- **fix and retry:** Stop the pipeline. The user will fix the issue and re-run `/research`.
+- **cancel:** Stop the pipeline entirely.
+
+If SearXNG was auto-started (check `report.components.searxng.auto_started`), log:
+`SearXNG container auto-started successfully.`
+
+**If `report.degraded` is false** (tier is `full`), continue silently.
 
 ### 0c. Update vault index
 

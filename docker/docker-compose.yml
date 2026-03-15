@@ -1,4 +1,3 @@
-version: "3.7"
 services:
   searxng:
     image: searxng/searxng:latest

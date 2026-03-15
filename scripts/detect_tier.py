@@ -8,6 +8,7 @@ model recommendations for Ollama.
 import shutil
 import subprocess
 import platform
+import time
 from pathlib import Path
 
 import requests
@@ -97,6 +98,135 @@ def get_platform_info() -> dict:
         "arch": platform.machine(),
         "is_wsl": "microsoft" in platform.uname().release.lower()
                   if platform.system() == "Linux" else False,
+    }
+
+
+def ensure_searxng(url: str | None, repo_root: Path | None = None) -> dict:
+    """Try to start SearXNG if configured but not running.
+
+    Checks if SearXNG is reachable. If not, attempts to start it via
+    docker compose using the docker-compose.yml in the plugin repo.
+    Polls for up to 15 seconds after starting.
+    """
+    result = check_searxng(url)
+    if result.get("available"):
+        return result
+
+    if not url:
+        return {"available": False, "auto_started": False, "error": "No SearXNG URL configured"}
+
+    # Find docker-compose.yml
+    compose_file = None
+    if repo_root:
+        candidate = repo_root / "docker" / "docker-compose.yml"
+        if candidate.exists():
+            compose_file = candidate
+
+    if not compose_file:
+        return {**result, "auto_started": False,
+                "error": f"SearXNG not reachable and no docker-compose.yml found"}
+
+    # Check if docker is available
+    if shutil.which("docker") is None:
+        return {**result, "auto_started": False,
+                "error": "SearXNG not reachable and docker is not installed"}
+
+    # Try to start the container
+    try:
+        proc = subprocess.run(
+            ["docker", "compose", "-f", str(compose_file.name), "up", "-d"],
+            capture_output=True, text=True, timeout=30,
+            cwd=str(compose_file.parent)
+        )
+        if proc.returncode != 0:
+            return {**result, "auto_started": False,
+                    "error": f"docker compose up failed: {proc.stderr.strip()}"}
+    except Exception as e:
+        return {**result, "auto_started": False,
+                "error": f"Failed to run docker compose: {e}"}
+
+    # Poll for availability
+    for _ in range(7):  # 7 attempts × 2s = 14s
+        time.sleep(2)
+        check = check_searxng(url)
+        if check.get("available"):
+            return {**check, "auto_started": True}
+
+    final = check_searxng(url)
+    return {**final, "auto_started": True,
+            "error": final.get("error", "SearXNG started but not reachable after 15s")}
+
+
+def build_tier_report(searxng_url: str | None, repo_root: Path | None = None) -> dict:
+    """Build a comprehensive tier report with auto-start for SearXNG.
+
+    Checks all components, attempts to auto-start SearXNG if needed,
+    and returns a report suitable for user-facing tier alerts.
+    """
+    ollama = check_ollama()
+    searxng = ensure_searxng(searxng_url, repo_root)
+    ytdlp = check_ytdlp()
+    whisper = check_whisper()
+
+    # Build component status
+    components = {
+        "ollama": {
+            "status": "ok" if ollama.get("running") else "missing",
+            "installed": ollama.get("installed", False),
+            "models": ollama.get("models", []),
+        },
+        "searxng": {
+            "status": "ok" if searxng.get("available") else "missing",
+            "url": searxng.get("url"),
+            "auto_started": searxng.get("auto_started", False),
+        },
+        "ytdlp": {"status": "ok" if ytdlp.get("installed") else "missing"},
+        "whisper": {"status": "ok" if whisper.get("installed") else "missing"},
+    }
+
+    if ollama.get("running") and ollama.get("models"):
+        components["ollama"]["model"] = ollama["models"][0]
+    if not searxng.get("available") and searxng.get("error"):
+        components["searxng"]["error"] = searxng["error"]
+
+    # Determine tier
+    ollama_ok = ollama.get("running", False)
+    searxng_ok = searxng.get("available", False)
+
+    if ollama_ok and searxng_ok:
+        tier = "full"
+    elif ollama_ok:
+        tier = "mid"
+    else:
+        tier = "base"
+
+    # Build missing lists
+    missing_for_full = []
+    missing_for_mid = []
+
+    if not searxng_ok:
+        msg = f"SearXNG not reachable at {searxng_url or '(not configured)'}"
+        if searxng.get("auto_started"):
+            msg += f" (auto-start attempted: {searxng.get('error', 'unknown error')})"
+        elif searxng.get("error"):
+            msg += f" ({searxng['error']})"
+        missing_for_full.append(msg)
+
+    if not ollama_ok:
+        if ollama.get("installed"):
+            missing_for_mid.append("Ollama installed but not running — start with: ollama serve")
+            missing_for_full.append("Ollama installed but not running — start with: ollama serve")
+        else:
+            missing_for_mid.append("Ollama not installed — see https://ollama.com")
+            missing_for_full.append("Ollama not installed — see https://ollama.com")
+
+    return {
+        "tier": tier,
+        "max_tier": "full",
+        "degraded": tier != "full",
+        "components": components,
+        "missing_for_full": missing_for_full,
+        "missing_for_mid": missing_for_mid,
     }
 
 

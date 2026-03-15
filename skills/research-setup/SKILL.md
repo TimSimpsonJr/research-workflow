@@ -59,7 +59,7 @@ If entering a path, provide the absolute path (e.g., C:\Users\you\Documents\My V
 - Create the template structure using Bash:
 ```bash
 mkdir -p "PARENT/Research Vault/Inbox"
-mkdir -p "PARENT/Research Vault/Areas"
+mkdir -p "PARENT/Research Vault/Projects"
 mkdir -p "PARENT/Research Vault/Sources"
 mkdir -p "PARENT/Research Vault/Resources"
 mkdir -p "PARENT/Research Vault/assets"
@@ -74,7 +74,7 @@ tags: [index]
 
 # Vault Index
 
-## Areas
+## Projects
 
 - [[Inbox]] — unsorted incoming notes
 
@@ -462,7 +462,7 @@ Use AskUserQuestion:
 Do you have a SearXNG instance running?
 
 SearXNG provides private web search for the research pipeline's full tier.
-- If you have one: provide the URL (e.g., http://localhost:8080)
+- If you have one: provide the URL (e.g., http://localhost:8888)
 - If not: the base tier will use Claude's built-in WebSearch tool instead
 
 Enter the URL, or type "skip" to skip.
