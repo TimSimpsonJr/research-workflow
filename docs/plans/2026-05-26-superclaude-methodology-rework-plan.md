@@ -159,9 +159,12 @@ def main():
     vault_path = Path(cfg["vault_root"])
     frontmatter_fields = cfg.get("frontmatter_fields", ["title", "source", "tags", "created"])
 
-    target = (vault_path / args.folder).resolve() if args.folder else vault_path
+    target = (vault_path / args.folder).resolve() if args.folder else vault_path.resolve()
     vault_resolved = vault_path.resolve()
-    if not str(target).startswith(str(vault_resolved)):
+    # Path containment check — use is_relative_to (Py3.10+), not string prefix.
+    # String-prefix matching falsely classifies sibling paths like C:\vault2 as
+    # being inside C:\vault.
+    if target != vault_resolved and not target.is_relative_to(vault_resolved):
         console.print(f"[red]Folder escapes vault path: {args.folder}[/red]")
         sys.exit(1)
     if not target.exists():
@@ -198,11 +201,47 @@ The `config.FRONTMATTER_FIELDS` reference at the old line 96 is replaced with a 
 Run: `pytest tests/test_vault_lint.py -v`
 Expected: PASS.
 
-**Step 3: Commit**
+**Step 3: Add a test for the path-containment check**
+
+Append to `tests/test_vault_lint.py`. This pins the sibling-prefix bug fix:
+
+```python
+def test_vault_lint_rejects_sibling_folder(tmp_path, capsys):
+    """A sibling path that shares a string prefix with the vault root must be rejected."""
+    import sys
+    import subprocess
+    # Make two vault-shaped sibling dirs: vault and vault2
+    vault = tmp_path / "vault"
+    sibling = tmp_path / "vault2"
+    vault.mkdir()
+    sibling.mkdir()
+    # Minimal config inside vault so load_config doesn't bail early
+    (vault / ".research-workflow").mkdir()
+    (vault / ".research-workflow" / "config.json").write_text(
+        '{"vault_root": "' + str(vault).replace("\\", "/") + '", '
+        '"frontmatter_fields": ["title"], "assets": "assets"}'
+    )
+
+    # Run vault_lint as a subprocess, asking it to lint a sibling folder.
+    # Pass --folder pointing at ../vault2 from the perspective of the vault.
+    repo_root = Path(__file__).parent.parent
+    script = repo_root / "scripts" / "vault_lint.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--vault", str(vault), "--folder", "../vault2"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 1
+    assert "escapes vault" in (result.stdout + result.stderr).lower()
+```
+
+Run: `pytest tests/test_vault_lint.py::test_vault_lint_rejects_sibling_folder -v`
+Expected: PASS with the `is_relative_to` containment check; would FAIL with the old `startswith` prefix check.
+
+**Step 4: Commit**
 
 ```bash
-git add scripts/vault_lint.py scripts/config_manager.py
-git commit -m "refactor(vault_lint): drop legacy config/utils, use config_manager via --vault arg"
+git add scripts/vault_lint.py scripts/config_manager.py tests/test_vault_lint.py
+git commit -m "refactor(vault_lint): drop legacy config/utils, use config_manager via --vault arg; fix sibling-path escape bug"
 ```
 
 ### Task 0.4 — Delete utils.py (now unused)
@@ -2721,9 +2760,25 @@ vault_root: {VAULT}
 scripts_dir: {SCRIPTS}
 ```
 
-### 2c. Parse strategy
+### 2c. Parse strategy and persist it
 
-The agent returns a JSON object. Read the top-level `strategy` field:
+The agent returns a JSON object. Read the top-level `strategy` field.
+
+**Persist the strategy immediately** — every path through Stage 2 ends up needing `run["strategy"]` set, so save it before branching. (`intent_planning` runs may re-dispatch in 2d and produce a different strategy; that re-dispatch overwrites this value.)
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+run['strategy'] = 'STRATEGY_VALUE_FROM_RESOLVER'
+save_state(Path('STATE_DIR'), run)
+"
+```
+
+Then branch by strategy:
 
 - `planning_only`: continue to Stage 2e (one-line confirm) with the resolved topics from this response.
 - `intent_planning`: continue to Stage 2d (Q&A loop).
@@ -2758,8 +2813,8 @@ Only entered when strategy is `planning_only`. Show the user:
 Researching {project} at depth {topic.depth}, ~{estimated_minutes}min. Proceed? [yes / edit / cancel]
 ```
 
-- `yes`: initialize topics from the resolver response, save the strategy in state (2f), then skip to Stage 4 (hop loop). Stage 3 is bypassed.
-- `edit`: upgrade to `unified` strategy — present the full plan as in Stage 3d below. The run is already created; Stage 3 will populate topics and approve.
+- `yes`: initialize topics from the resolver response (see snippet below), then skip to Stage 4 (hop loop). Stage 3 is bypassed. Strategy was already persisted in 2c.
+- `edit`: upgrade to `unified` strategy — present the full plan as in Stage 3d below. The run is already created; Stage 3 will populate topics and approve. Also overwrite `run['strategy'] = 'unified'` since the user chose to upgrade.
 - `cancel`: call `abandon_run(STATE_DIR)` and stop.
 
 When `yes`: initialize topics now (since Stage 3 is being skipped):
@@ -2777,21 +2832,7 @@ save_state(Path('STATE_DIR'), run)
 "
 ```
 
-### 2f. Save the strategy in state
-
-Update state with strategy field:
-
-```bash
-python -c "
-import sys
-sys.path.insert(0, 'SCRIPTS')
-from state import load_run, save_state
-from pathlib import Path
-run = load_run(Path('STATE_DIR'))
-run['strategy'] = 'STRATEGY_VALUE'
-save_state(Path('STATE_DIR'), run)
-"
-```
+Note: strategy persistence now happens once in Stage 2c (immediately after the resolver returns), so every path through Stage 2 ends with `run["strategy"]` set. No separate 2f step needed.
 ```
 
 **Step 2: Commit**
