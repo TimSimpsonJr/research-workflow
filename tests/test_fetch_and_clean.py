@@ -120,7 +120,8 @@ def test_fetch_via_jina_title_empty_when_no_heading():
 
 def test_fetch_url_uses_jina_first():
     from fetch_and_clean import fetch_url
-    with patch("fetch_and_clean.fetch_via_jina", return_value=("content", "title")) as mock_jina:
+    long_body = "Real Jina content. " * 20  # 380 chars
+    with patch("fetch_and_clean.fetch_via_jina", return_value=(long_body, "title")) as mock_jina:
         content, title, method = fetch_url("https://example.com")
     assert method == "jina"
     mock_jina.assert_called_once()
@@ -128,19 +129,79 @@ def test_fetch_url_uses_jina_first():
 
 def test_fetch_url_falls_back_to_wayback_when_jina_fails():
     from fetch_and_clean import fetch_url
+    long_archived = "Archived content from the Wayback Machine. " * 10  # 430 chars
     with patch("fetch_and_clean.fetch_via_jina", side_effect=Exception("timeout")):
-        with patch("fetch_and_clean.fetch_via_wayback", return_value=("archived content", "archived title")) as mock_wb:
+        with patch("fetch_and_clean.fetch_via_wayback", return_value=(long_archived, "archived title")) as mock_wb:
             content, title, method = fetch_url("https://example.com")
     assert method == "wayback"
-    assert content == "archived content"
+    assert content == long_archived
 
 
 def test_fetch_url_raises_when_both_fail():
     from fetch_and_clean import fetch_url
     with patch("fetch_and_clean.fetch_via_jina", side_effect=Exception("jina fail")):
         with patch("fetch_and_clean.fetch_via_wayback", side_effect=Exception("wayback fail")):
-            with pytest.raises(RuntimeError, match="All fetch methods failed"):
-                fetch_url("https://example.com")
+            with patch("fetch_and_clean.fetch_via_playwright", side_effect=Exception("playwright fail")):
+                with pytest.raises(RuntimeError, match="All fetch methods failed"):
+                    fetch_url("https://example.com")
+
+
+# ── Playwright fallback (Phase 3) ─────────────
+
+MIN_USEFUL_CONTENT_CHARS = 200
+
+
+def test_fetch_url_falls_back_to_playwright_when_jina_and_wayback_fail(monkeypatch):
+    from fetch_and_clean import fetch_url
+
+    def jina_fails(url, key=None):
+        raise RuntimeError("jina down")
+    def wayback_fails(url, key=None):
+        raise RuntimeError("no wayback snapshot")
+    def playwright_succeeds(url, **kw):
+        return ("Real JS-page content here, longer than 200 chars. " * 10, "JS Page Title")
+
+    monkeypatch.setattr("fetch_and_clean.fetch_via_jina", jina_fails)
+    monkeypatch.setattr("fetch_and_clean.fetch_via_wayback", wayback_fails)
+    monkeypatch.setattr("fetch_and_clean.fetch_via_playwright", playwright_succeeds)
+
+    content, title, method = fetch_url("https://example-spa.com")
+    assert "Real JS-page content" in content
+    assert title == "JS Page Title"
+    assert method == "playwright"
+
+
+def test_fetch_url_thin_jina_content_falls_through_to_playwright(monkeypatch):
+    from fetch_and_clean import fetch_url
+
+    monkeypatch.setattr("fetch_and_clean.fetch_via_jina", lambda url, key=None: ("", ""))
+    monkeypatch.setattr("fetch_and_clean.fetch_via_wayback", lambda url, key=None: ("", ""))
+    monkeypatch.setattr(
+        "fetch_and_clean.fetch_via_playwright",
+        lambda url, **kw: ("Real content from JS execution. " * 20, "JS Title"),
+    )
+
+    content, title, method = fetch_url("https://example-spa.com")
+    assert method == "playwright"
+    assert "Real content" in content
+
+
+def test_fetch_url_skips_playwright_when_jina_returns_useful_content(monkeypatch):
+    from fetch_and_clean import fetch_url
+
+    monkeypatch.setattr(
+        "fetch_and_clean.fetch_via_jina",
+        lambda url, key=None: ("Jina content. " * 50, "Jina Title"),
+    )
+    called = []
+    monkeypatch.setattr(
+        "fetch_and_clean.fetch_via_playwright",
+        lambda url, **kw: called.append(url) or ("", ""),
+    )
+
+    content, title, method = fetch_url("https://example.com")
+    assert method == "jina"
+    assert called == []
 
 
 # ── process_urls — cache hit / miss / failure ─
