@@ -522,6 +522,153 @@ update_stage(Path('STATE_DIR'), 'quality_gate')
 
 ---
 
+## Stage 5: Quality Gate
+
+After all topics have status != "active", compute the run-level quality signals and decide whether to proceed to classify, auto-replan, or prompt the user.
+
+### 5a. Compute per-topic pass/fail
+
+Each topic has its own depth and therefore its own `confidence_target` (via `get_depth_profile(topic.depth)["confidence_target"]`). Check per-topic, not run-aggregate:
+
+```python
+from confidence import get_depth_profile
+
+def topic_passes(t) -> bool:
+    target = get_depth_profile(t["depth"])["confidence_target"]
+    latest_conf = t["confidence_history"][-1] if t["confidence_history"] else 0.0
+    return latest_conf >= target and t["contradiction_rate"] <= 0.3
+
+failing_topics = [t for t in run["topics"] if not topic_passes(t)]
+```
+
+If `failing_topics` is empty: proceed to Stage 6 (classify).
+
+For diagnostic display and the low-confidence note marker, also compute a "worst-case confidence" proxy across the run:
+
+```python
+worst_confidence = min(
+    (t["confidence_history"][-1] if t["confidence_history"] else 0.0
+     for t in run["topics"]),
+    default=0.0,
+)
+```
+
+This is the value used downstream as `OVERALL_CONFIDENCE` in Stage 5c's user-decision payload and 5d's `final_confidence_score`. There is no single "run target" because depths are per-topic, but the worst-topic confidence is the meaningful number to surface in user prompts and frontmatter callouts.
+
+### 5b. Auto-replan (if eligible)
+
+If `failing_topics` is non-empty AND `replan_count < 2`, run an auto-replan cycle:
+
+1. For each failing topic, construct a replan hint:
+   - If the topic has a stored `replan_hint` from a hop-planner `decision: "replan"`: use it directly.
+   - Otherwise: synthesize a hint pointing at the gap (e.g., `{"issue": "thin sources", "suggested_pattern": "entity_expansion", "suggested_query_focus": "official agency data"}`). Persist via `set_replan_hint(topic, synthesized_hint)`.
+2. **Re-admit each failing topic into the hop loop.** A topic that exhausted its initial budget has `current_hop == max_hops`, so Stage 4's admission filter (`current_hop < max_hops`) would otherwise skip it. To enable another hop without rewinding completed work, call `bump_max_hops(topic, increment=1)`. This gives the topic exactly one additional hop slot.
+3. Call `mark_topic_status(topic, "active")` to re-admit.
+4. Call `increment_replan(STATE_DIR)`.
+5. Return to Stage 4 (the hop loop runs one more pass; only re-admitted topics dispatch search/fetch/summarize/hop-planner). Stage 4a's search-agent reads `topic.replan_hint` to bias the next query toward the suggested pattern/focus.
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, set_replan_hint, bump_max_hops, mark_topic_status, increment_replan
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+run = load_run(state_dir)
+for t in FAILING_TOPICS:
+    if t['replan_hint'] is None:
+        set_replan_hint(state_dir, t['topic'], SYNTHESIZED_HINT)
+    bump_max_hops(state_dir, t['topic'], increment=1)
+    mark_topic_status(state_dir, t['topic'], 'active')
+increment_replan(state_dir)
+"
+```
+
+### 5c. User prompt (after 2 auto-replan failures)
+
+If `replan_count == 2`, present the diagnostic:
+
+```
+⚠ Quality gate triggered after {replan_count} auto-replan attempts.
+
+Topic-by-topic results:
+{for each topic:}
+  - {topic.topic}: confidence {topic.confidence_history[-1]:.2f}, contradictions {topic.contradiction_rate:.0%}
+{end}
+
+Weakest topics:
+{for each weak topic:}
+  - "{topic}": {gap description}
+{end}
+
+Options:
+  - replan: try one more cycle with focused hints (1 extension max)
+  - continue: write notes anyway, with low-confidence flags
+  - abandon: stop here, preserve search/fetch results for inspection
+```
+
+Wait for the user's response.
+
+Record the decision:
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import record_user_decision
+from pathlib import Path
+record_user_decision(Path('STATE_DIR'), decision='DECISION_VALUE', confidence=OVERALL_CONFIDENCE)
+"
+```
+
+Branch by decision:
+
+- **`replan`**: apply the same re-admission recipe as Stage 5b (so the topic actually makes it back into the hop loop):
+  - For each failing topic, if `replan_hint` is None, synthesize one (the user may also supply a manual hint via free-text input -- capture it as the `issue` field).
+  - Call `bump_max_hops(topic, increment=1)` so `current_hop < max_hops` again.
+  - Call `mark_topic_status(topic, "active")`.
+  - Call `increment_replan(STATE_DIR)` once more (reaching 3).
+
+  Return to Stage 4. After this attempt, no more replans -- if it fails again, present continue/abandon only.
+- **`continue`**: mark the run with `low_confidence = true` (see 5d). Proceed to Stage 6. The write stage adds body callouts to all written notes.
+- **`abandon`**: set `abandoned_at_gate: true` in the run dict, save, then call `abandon_run(STATE_DIR)` (which already exists in state.py and archives via `_archive_run`). Print the archived path so the user can inspect:
+
+  ```bash
+  python -c "
+  import sys
+  sys.path.insert(0, 'SCRIPTS')
+  from state import load_run, save_state, abandon_run
+  from pathlib import Path
+  state_dir = Path('STATE_DIR')
+  run = load_run(state_dir)
+  if run is not None:
+      run['abandoned_at_gate'] = True
+      save_state(state_dir, run)
+  abandon_run(state_dir)
+  "
+  ```
+
+  The archived files land under `STATE_DIR/history/{run_id}/` (the existing `_archive_run` destination). Print that path to the user.
+
+### 5d. Save low-confidence flag
+
+If decision was `continue`:
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+run['low_confidence'] = True
+run['final_confidence_score'] = OVERALL_CONFIDENCE
+save_state(Path('STATE_DIR'), run)
+"
+```
+
+---
+
 ## Stage 7: Classify
 
 ### 7a. Dispatch classify agent
