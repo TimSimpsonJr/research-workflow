@@ -2,14 +2,9 @@
 """Tests for summarize.py — article summarization via Ollama or file output."""
 
 import json
-import os
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-
-os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
-os.environ.setdefault("VAULT_PATH", "C:/fake/vault")
-os.environ.setdefault("INBOX_PATH", "C:/fake/vault/Inbox")
 
 
 # ── summarize_article ────────────────────────────
@@ -201,3 +196,48 @@ def test_prepare_for_claude_code_slugifies_filenames(tmp_path):
     filename = output[0]["file"]
     assert filename.startswith("0-")
     assert "hello-world" in filename.lower()
+
+
+# ── CLI output shape (Ollama mode) ────────────────────
+# Stage 6a in SKILL.md aggregates per-hop summary files via
+# `data.get("items", [])`. The Ollama-mode CLI must emit `items` (not
+# `summaries`) so the aggregation matches.
+
+def test_cli_ollama_mode_emits_items_key(tmp_path, monkeypatch):
+    import subprocess
+    fetch = {"fetched": [
+        {"url": "https://a.com", "title": "A", "content": "Content A"},
+    ]}
+    inp = tmp_path / "in.json"
+    inp.write_text(json.dumps(fetch))
+    out = tmp_path / "out.json"
+
+    # Run summarize.py with Ollama mode but patch the network call so we don't
+    # need a real Ollama instance. We do this by importing main() and patching
+    # requests.post in the summarize module.
+    import sys
+    sys.path.insert(0, "scripts")
+    import summarize as sm
+    mock_response = MagicMock()
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {"response": json.dumps({
+        "summary": "S", "source_type": "journalism",
+        "key_entities": [], "key_claims": [],
+    })}
+    with patch.object(sm, "requests") as mock_req:
+        mock_req.post.return_value = mock_response
+        argv_backup = sys.argv
+        sys.argv = [
+            "summarize.py",
+            "--input", str(inp),
+            "--output", str(out),
+            "--model", "test-model",
+        ]
+        try:
+            sm.main()
+        finally:
+            sys.argv = argv_backup
+    result = json.loads(out.read_text())
+    assert "items" in result, f"expected 'items' key in CLI output, got: {list(result.keys())}"
+    assert "summaries" not in result, "legacy 'summaries' key should be gone"
+    assert isinstance(result["items"], list)

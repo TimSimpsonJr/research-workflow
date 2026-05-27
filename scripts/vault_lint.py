@@ -20,9 +20,6 @@ from rich.console import Console
 from rich.prompt import Prompt
 from rich.table import Table
 
-import config
-from utils import startup_checks
-
 console = Console()
 
 
@@ -77,23 +74,35 @@ def fix_issue(note_path: Path, missing_fields: list[str]) -> None:
 
 
 def main():
+    from config_manager import load_config
+
     parser = argparse.ArgumentParser(description="Find notes missing required frontmatter.")
+    parser.add_argument("--vault", type=Path, default=Path.cwd(),
+                        help="Vault root path (defaults to current directory)")
     parser.add_argument("--folder", help="Subfolder within vault to lint (default: whole vault)")
     parser.add_argument("--fix", action="store_true", help="Interactively fix missing fields")
     args = parser.parse_args()
 
-    startup_checks()
+    cfg = load_config(args.vault)
+    if cfg is None:
+        console.print(f"[red]Error:[/red] No research-workflow config found under {args.vault}. "
+                      f"Run /research-setup first, or pass --vault PATH.")
+        sys.exit(1)
 
-    target = (config.VAULT_PATH / args.folder).resolve() if args.folder else config.VAULT_PATH
-    vault_resolved = config.VAULT_PATH.resolve()
-    if not str(target).startswith(str(vault_resolved)):
+    vault_path = Path(cfg["vault_root"])
+    frontmatter_fields = cfg.get("frontmatter_fields", ["title", "source", "tags", "created"])
+
+    target = (vault_path / args.folder).resolve() if args.folder else vault_path.resolve()
+    vault_resolved = vault_path.resolve()
+    # Path containment check — use is_relative_to (Py3.10+), not string prefix.
+    if target != vault_resolved and not target.is_relative_to(vault_resolved):
         console.print(f"[red]Folder escapes vault path: {args.folder}[/red]")
         sys.exit(1)
     if not target.exists():
         console.print(f"[red]Folder not found: {target}[/red]")
         sys.exit(1)
 
-    issues = lint_vault(target, config.FRONTMATTER_FIELDS)
+    issues = lint_vault(target, frontmatter_fields)
 
     if not issues:
         console.print("[green]No issues found.[/green]")
@@ -103,7 +112,7 @@ def main():
     table.add_column("File", style="cyan")
     table.add_column("Missing Fields", style="red")
     for issue in issues:
-        rel = issue["file"].relative_to(config.VAULT_PATH)
+        rel = issue["file"].relative_to(vault_path)
         table.add_row(str(rel), ", ".join(issue["missing"]))
     console.print(table)
 

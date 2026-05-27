@@ -1,0 +1,9 @@
+{
+  "topic": "Test topic about Flock Safety",
+  "current_hop": 1,
+  "decision": "stop",
+  "confidence_score": 0.72,
+  "contradiction_rate": 0.0,
+  "next_hop": null,
+  "self_reflection": "Quick-depth budget (max_hops=1) exhausted; confidence target met with one T1 + two T2 sources including two primary sources. No contradictions detected. Stopping per single-hop budget."
+}

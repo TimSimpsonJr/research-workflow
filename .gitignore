@@ -5,7 +5,6 @@ __pycache__/
 .pytest_cache/
 .cache/
 repomix-output.txt
-scripts/config.py
 .venv/
 venv/
 *.log
@@ -16,3 +15,4 @@ desktop.ini
 repomix.config.json
 plan.md
 docs/
+skills/research/SKILL.md.v2.bak

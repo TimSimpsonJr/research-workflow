@@ -617,7 +617,36 @@ Vault index built successfully.
 
 ---
 
-## Step 11: Summary
+## Step 11: Optional -- install metadata-hide CSS snippet
+
+The research pipeline writes a few diagnostic frontmatter fields to every note it generates (`hop_genealogy`, `research_run`, `write_model`). They're useful for debugging and telemetry but clutter Obsidian's Properties panel. A small CSS snippet hides them in the UI while leaving them fully searchable in the file.
+
+Use **AskUserQuestion**:
+```
+Want to hide the diagnostic frontmatter fields (hop_genealogy, research_run, write_model)
+in Obsidian's Properties panel? They'll still be searchable, just not displayed.
+
+Install CSS snippet? [yes / no]
+```
+
+**If `yes`:**
+
+Copy the snippet into the vault's snippets directory. Use Bash:
+```bash
+mkdir -p "VAULT_ROOT/.obsidian/snippets"
+cp "{{SCRIPTS_DIR}}/assets/research-metadata-hide.css" "VAULT_ROOT/.obsidian/snippets/research-metadata-hide.css"
+```
+
+Replace `VAULT_ROOT` with the actual vault path. Then tell the user:
+```
+Snippet copied. Enable it in Obsidian -> Settings -> Appearance -> CSS snippets -> toggle "research-metadata-hide".
+```
+
+**If `no`:** Skip silently and continue to the summary.
+
+---
+
+## Step 12: Summary
 
 Print a clear summary of everything that was configured:
 

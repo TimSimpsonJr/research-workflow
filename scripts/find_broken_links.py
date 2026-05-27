@@ -16,9 +16,6 @@ from urllib.parse import unquote
 from rich.console import Console
 from rich.table import Table
 
-import config
-from utils import startup_checks
-
 console = Console()
 
 
@@ -59,8 +56,30 @@ def find_broken_links(vault_path: Path) -> list[dict]:
 
 
 def main():
-    startup_checks()
-    broken = find_broken_links(config.VAULT_PATH)
+    import argparse
+    from config_manager import load_config
+
+    parser = argparse.ArgumentParser(description="Find broken wiki-links in an Obsidian vault.")
+    parser.add_argument(
+        "--vault",
+        type=Path,
+        default=Path.cwd(),
+        help="Vault root path (defaults to current directory)",
+    )
+    args = parser.parse_args()
+
+    cfg = load_config(args.vault)
+    if cfg is None:
+        console.print(f"[red]Error:[/red] No research-workflow config found under {args.vault}. "
+                      f"Run /research-setup first, or pass --vault PATH.")
+        sys.exit(1)
+
+    vault_path = Path(cfg["vault_root"])
+    if not vault_path.exists():
+        console.print(f"[red]Error:[/red] vault_root does not exist: {vault_path}")
+        sys.exit(1)
+
+    broken = find_broken_links(vault_path)
 
     if not broken:
         console.print("[green]No broken links found.[/green]")
@@ -70,7 +89,7 @@ def main():
     table.add_column("File", style="cyan")
     table.add_column("Broken Link", style="red")
     for item in broken:
-        rel = item["file"].relative_to(config.VAULT_PATH)
+        rel = item["file"].relative_to(vault_path)
         table.add_row(str(rel), item["link"])
     console.print(table)
     sys.exit(1)

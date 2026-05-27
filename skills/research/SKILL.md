@@ -1,22 +1,19 @@
 ---
 name: research
-description: 'Deep research pipeline for Obsidian vaults. Usage: /research "topic or natural language prompt". Supports batch research, thread-pulling from vault notes, and local file ingestion.'
+description: 'Deep research pipeline for Obsidian vaults. Usage: /research "topic or natural language prompt". Supports batch research, thread-pulling from vault notes, local file ingestion, and multi-hop investigation with confidence-based replanning.'
 ---
 
-# Research — Sonnet Orchestrator (Stateful Pipeline)
+# Research -- v3 Orchestrator (Multi-Hop Pipeline)
 
-You are the orchestrator. You run a multi-stage research pipeline that searches, fetches, summarizes, classifies, and writes vault notes. You dispatch Haiku subagents for cheap parallel work and write the final notes yourself (or escalate to Opus for synthesis).
+You are the orchestrator. You run a stateful multi-stage research pipeline that searches, fetches, summarizes, classifies, and writes vault notes -- with optional multi-hop investigation gated by confidence scoring. You dispatch Haiku subagents for cheap parallel work, Sonnet for resolver and hop-planner, and write final notes yourself (or escalate to Opus for synthesis notes).
 
 ## Bootstrap Constants
 
-These two paths are set during plugin installation. Everything else is loaded from config.
-
-- `VAULT` = `{{VAULT_ROOT}}`   <!-- Absolute path to the Obsidian vault -->
-- `REPO` = `{{REPO_ROOT}}`     <!-- Absolute path to the research-workflow repo root -->
-
-Derived paths (used throughout all stages):
+- `VAULT` = `{{VAULT_ROOT}}`
+- `REPO` = `{{REPO_ROOT}}`
 - `SCRIPTS` = `REPO/scripts`
 - `STATE_DIR` = `VAULT/.research-workflow/state`
+- `CASES_DIR` = `VAULT/.research-workflow/cases`
 
 ---
 
@@ -153,33 +150,40 @@ Use the user's response:
 - **Restart:** Run `python -c "from state import abandon_run; abandon_run(Path('STATE_DIR'))"` via Bash, then proceed to Stage 2.
 - **Abandon:** Run the same abandon command and stop.
 
+If `state.load_run()` returned None and the user just ran /research (no other reason for that), it may be that an old-schema (v2) run was abandoned silently. Stage 0's config load already printed the migration message -- no further action needed.
+
 ---
 
-## Stage 2: Resolve
+## Stage 2: Triage
 
-### 2a. Create a new run
+The resolver classifies the prompt's strategy before resolving topics. The run is created at the START of this stage so that any downstream state-writing helper (`save_state`, `record_hop`, `add_usage`, etc.) has somewhere to write to -- even when the planning_only path bypasses Stage 3's full approval flow.
 
-Generate a run ID from the current date and a slugified version of the user's input (e.g., `2026-03-05-sc-alpr-research`).
+### 2a. Create the run
 
-Run via Bash:
+Generate a run ID from the current date and a slugified version of the user's input (e.g., `2026-03-05-sc-alpr-research`). Then:
+
 ```bash
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from state import create_run
+from state import create_run, update_stage
 from pathlib import Path
-r = create_run(Path('STATE_DIR'), 'RUN_ID', 'TIER')
+state_dir = Path('STATE_DIR')
+r = create_run(state_dir, 'RUN_ID', 'TIER')
+update_stage(state_dir, 'triage')
 print(json.dumps(r))
 "
 ```
 
-### 2b. Dispatch topic-resolver agent
+The run begins with no topics; topics are populated after the resolver returns (in 2c.iv or Stage 3).
+
+### 2b. Dispatch topic-resolver agent (Sonnet)
 
 Read the agent definition: `REPO/agents/topic-resolver.md`
 
 Dispatch via the Task tool:
 - `subagent_type`: `general-purpose`
-- `model`: `haiku`
+- `model`: `sonnet`
 - `prompt`: The full contents of `agents/topic-resolver.md`, followed by a `---` separator, followed by:
 
 ```
@@ -188,28 +192,124 @@ vault_root: {VAULT}
 scripts_dir: {SCRIPTS}
 ```
 
-### 2c. Parse response
+### 2c. Parse strategy and persist it
 
-The agent returns a single JSON object. Parse it to extract:
-- `project` -- display name for this research batch
-- `topics` -- list of `{topic, mode, priority, existing_urls, related_vault_notes}`
-- `local_sources` -- list of `{path, type}` (may be empty)
-- `thread_pulls` -- list of `{source_note, extracted_leads}` (may be empty)
-- `shared_context_files` -- vault-relative paths for context
-- `execution_order` -- `tier_1_first`, `parallel`, or `sequential`
-- `estimated_usage` -- message counts
+The agent returns a JSON object. Read the top-level `strategy` field.
 
-If the response starts with `ERROR:`, output the error, abandon the run, and stop.
+**Persist the strategy immediately** -- every path through Stage 2 ends up needing `run["strategy"]` set, so save it before branching. (`intent_planning` runs may re-dispatch in 2d and produce a different strategy; that re-dispatch overwrites this value.)
 
-### 2d. Present plan for approval
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+run['strategy'] = 'STRATEGY_VALUE_FROM_RESOLVER'
+save_state(Path('STATE_DIR'), run)
+"
+```
 
-Show the user:
+Then branch by strategy:
+
+- `planning_only`: continue to Stage 2e (one-line confirm) with the resolved topics from this response.
+- `intent_planning`: continue to Stage 2d (Q&A loop).
+- `unified`: continue to Stage 3 (full resolve+plan flow with depth column). Note: the resolver has ALREADY produced topics; Stage 3 uses them rather than re-dispatching.
+
+### 2d. Intent-planning Q&A (if applicable)
+
+If strategy is `intent_planning`, the response contains `clarifying_questions[]` and topics are not yet resolved. For each question (max 3 for single-topic, max 1 for batch):
+
+1. Present the question to the user.
+2. Wait for the user's response.
+3. Append the answer to the running prompt context.
+
+After all questions are answered, re-dispatch the topic-resolver with the augmented prompt:
+
+```
+prompt: {original input}
+clarifying_qa: {array of {question, answer} pairs}
+vault_root: {VAULT}
+scripts_dir: {SCRIPTS}
+```
+
+Expect the new response to have `strategy: "unified"` (rare cases: `planning_only`).
+
+**Re-persist the strategy from the second response.** The first dispatch persisted `"intent_planning"` in 2c; that value is now stale because the clarified resolver may have returned a different strategy.
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+run['strategy'] = 'NEW_STRATEGY_FROM_SECOND_DISPATCH'
+save_state(Path('STATE_DIR'), run)
+"
+```
+
+Then continue to 2e or Stage 3 accordingly.
+
+If the user abandons mid-Q&A (cancel / explicit abort), call `abandon_run(STATE_DIR)` and stop.
+
+### 2e. Planning-only confirm (skip if strategy is unified)
+
+Only entered when strategy is `planning_only`. Show the user:
+
+```
+Researching {project} at depth {topic.depth}, ~{estimated_minutes}min. Proceed? [yes / edit / cancel]
+```
+
+- `yes`: initialize topics from the resolver response (see snippet below), then skip to Stage 4 (hop loop). Stage 3 is bypassed. Strategy was already persisted in 2c.
+- `edit`: upgrade to `unified` strategy -- present the full plan as in Stage 3a below. The run is already created; Stage 3 will populate topics and approve. Also overwrite `run['strategy'] = 'unified'` since the user chose to upgrade.
+- `cancel`: call `abandon_run(STATE_DIR)` and stop.
+
+When `yes`: initialize topics now (since Stage 3 is being skipped), then advance the stage marker to `hop_loop` so a crash before Stage 4 resumes at the right place (not back at `triage`):
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state, init_topic, update_stage
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+run = load_run(state_dir)
+# RESOLVER_RESPONSE is the parsed JSON from Stage 2b/2d; substitute its topics list.
+plan_topics = RESOLVER_RESPONSE['topics']
+run['topics'] = [init_topic(t['topic'], t['mode'], t['depth']) for t in plan_topics]
+save_state(state_dir, run)
+update_stage(state_dir, 'hop_loop')
+"
+```
+
+Note: strategy persistence now happens once in Stage 2c (immediately after the resolver returns), so every path through Stage 2 ends with `run["strategy"]` set. No separate 2f step needed.
+
+---
+
+## Stage 3: Resolve
+
+Stage 3 runs ONLY for `unified` strategy. The run was already created in Stage 2a and the resolver already dispatched in Stage 2b -- here we just present the plan and save the approval. Transition stage first:
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import update_stage
+from pathlib import Path
+update_stage(Path('STATE_DIR'), 'resolve')
+"
+```
+
+### 3a. Present plan for approval
+
+Show the user (using the resolver response from Stage 2c):
 ```
 Research Plan: {project}
 
 Topics ({count}):
 {for each topic:}
-  - [{priority}] {topic} ({mode})
+  - [{depth}] {topic} ({mode})
 {end}
 
 {if local_sources:}
@@ -240,21 +340,26 @@ Proceed? [yes / edit / cancel]
 ```
 
 Wait for user response via the conversation:
-- **yes / proceed:** Continue to Stage 3.
-- **edit:** Let the user modify topics/priorities, then re-display the plan.
+- **yes / proceed:** Continue to 3b.
+- **edit:** Let the user modify topics, modes, and depths, then re-display the plan.
 - **cancel:** Abandon the run and stop.
 
-### 2e. Save plan
+### 3b. Save plan
 
-Mark plan as approved in state:
+Initialize per-topic state using `init_topic` and save the research plan. The run already exists (created in Stage 2a), so we append topics to it rather than re-create:
+
 ```bash
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from state import update_stage, save_stage_output
+from state import load_run, save_state, init_topic, update_stage, save_stage_output
 from pathlib import Path
 state_dir = Path('STATE_DIR')
-update_stage(state_dir, 'search')
+run = load_run(state_dir)
+plan_topics = PLAN_JSON['topics']
+run['topics'] = [init_topic(t['topic'], t['mode'], t['depth']) for t in plan_topics]
+save_state(state_dir, run)
+update_stage(state_dir, 'hop_loop')
 save_stage_output(state_dir, 'research_plan', PLAN_JSON)
 "
 ```
@@ -263,197 +368,360 @@ Where `PLAN_JSON` is the parsed JSON from the resolver, serialized as a Python d
 
 ---
 
-## Stage 3: Search
+## Stage 4: Hop Loop
 
-### 3a. Dispatch search agents
+For each hop level from 1 to the maximum `max_hops` across all topics, run the search->fetch->media->summarize->hop-planner sequence for all topics that are still active at this level.
 
-For each topic in the plan where `mode` is `web_research`:
+Loop structure:
 
-Read the agent definition: `REPO/agents/search-agent.md`
+```python
+hop_level = 1
+while any(t.status == "active" and t.current_hop < t.max_hops for t in run.topics):
+    active = [t for t in run.topics if t.status == "active" and t.current_hop < t.max_hops]
 
-Dispatch via the Task tool:
+    # 4a-4d: process this hop level for all active topics
+    # See substages below.
+
+    # 4e: hop-planner decides continue/stop/replan per topic
+    for topic in active:
+        dispatch hop-planner
+        apply decision
+
+    hop_level += 1
+```
+
+### 4a. Search (parallel across topics)
+
+For each active topic, choose hop_context based on how the topic got admitted at this iteration:
+
+- **Hop 1 (fresh topic):** dispatch search-agent normally with `topic`, `existing_urls`, `depth`. No hop_context preamble.
+
+- **Hop 2+ following a hop-planner `continue` decision:** the prior hop-planner returned `next_hop`, which Stage 4e persisted to `topic.next_hop`. Read it from state:
+  - `pattern`: `topic.next_hop.pattern`
+  - `from`: `topic.next_hop.from`
+  - `seen_urls`: the topic's seen_urls list
+
+  **Do not clear `next_hop` here.** Stage 4e will overwrite it (or set it to None on stop/replan) when the new hop-planner response lands. Clearing eagerly in 4a would leave the in-flight hop with no routing state if the process crashes between 4a and 4e -- resume could not reconstruct `hop_context`.
+
+- **Hop following a quality-gate replan (Stage 5b or 5c re-admission):** the topic has a stored `replan_hint` instead of a prior `next_hop`. Read it (don't clear):
+  - `pattern`: `topic.replan_hint.suggested_pattern`
+  - `from`: `topic.replan_hint.suggested_query_focus` (treated as the focus topic/entity for the search)
+  - `seen_urls`: the topic's seen_urls list
+  - Optional: include the `issue` field as a brief addition to the preamble (e.g., "previous gap: thin sources")
+
+  **Do not clear `replan_hint` here either.** Stage 4e's continue branch is the one place that clears it (via `set_replan_hint(topic, None)`); the stop and replan branches leave it alone or overwrite it. This keeps the hop's routing context durable across crashes.
+
+**Routing precedence for Stage 4a:** when both `next_hop` and `replan_hint` are set (shouldn't happen in normal operation but possible after partial fixes), prefer `replan_hint` -- it's the more recent quality-gate intent. Stage 4e's continue branch handles the cleanup by clearing `replan_hint` once a hop completes successfully, so the precedence collision is short-lived.
+
+The search-agent's prompt template doesn't change. The orchestrator prepends a hop-context preamble for hop 2+:
+
+```
+HOP CONTEXT: This is hop {N} of {max_hops} for topic "{topic}". Use the {pattern} pattern, focusing on "{from}". Skip URLs in seen_urls.
+{if replan_hint: "Previous gap: " + replan_hint.issue}
+```
+
+Batch dispatches at <=5 topics per round.
+
+After dispatch, collect all `selected_urls` arrays from the search agent responses (and merge SearXNG results when `SEARXNG_AVAILABLE`, deduplicating by URL). Build a per-hop `search_context_hop{N}.json` file in `STATE_DIR/` keyed off active topics for this iteration.
+
+### 4b. Fetch
+
+Run `fetch_and_clean.py` once for all active topics' selected URLs at this hop:
+
+```bash
+python "SCRIPTS/fetch_and_clean.py" --input "STATE_DIR/search_context_hop{N}.json" --output "STATE_DIR/fetch_results_hop{N}.json"
+```
+
+Update each topic's `seen_urls` with the URLs that were successfully fetched, using the `add_seen_urls` state helper. For each topic, pass the list of URLs that ended up in `fetch_results_hop{N}.fetched` (i.e., the URLs that actually returned content, not the failed ones):
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import add_seen_urls
+from pathlib import Path
+add_seen_urls(Path('STATE_DIR'), topic_name='TOPIC', urls=URLS_FETCHED_FOR_TOPIC)
+"
+```
+
+The helper dedupes — calling it again with overlapping URLs (e.g., the same URL appears in multiple hops) is safe.
+
+**If `fetched` is empty and `failed` is non-empty:** treat the hop as a failure for the affected topic(s). The hop-planner in 4e will see zero new sources and decide accordingly. If ALL topics had zero successful fetches, abandon the run and stop (no fetched content means downstream stages have nothing to work with).
+
+### 4c. Media
+
+Before invoking `fetch_media.py`, split this hop's `fetch_results_hop{N}.json` into per-article content files. For each entry in `fetched`, write its `content` field to `STATE_DIR/content_hop{N}_{index}.md` (where `{index}` is the 0-based index of the article in `fetched`). Then run `fetch_media.py` per article:
+
+```bash
+python "SCRIPTS/fetch_media.py" --content "STATE_DIR/content_hop{N}_{index}.md" --assets-dir "ASSETS_DIR" --topic "{topic_slug}" --run-id "{RUN_ID}" --output "STATE_DIR/rewritten_hop{N}_{index}.md"
+```
+
+Replace the original `content` in `fetch_results_hop{N}` with the rewritten content from the output files.
+
+### 4d. Summarize
+
+Run `summarize.py` over the hop's fetch_results. Write to `summaries_hop{N}.json`.
+
+**If Ollama is available (mid or full tier):**
+```bash
+python "SCRIPTS/summarize.py" --input "STATE_DIR/fetch_results_hop{N}.json" --model "RECOMMENDED_MODEL" --output "STATE_DIR/summaries_hop{N}.json"
+```
+
+**If Ollama is NOT available (base tier):**
+```bash
+python "SCRIPTS/summarize.py" --input "STATE_DIR/fetch_results_hop{N}.json" --prepare-for-claude --output-dir "STATE_DIR/summaries_hop{N}/"
+```
+
+Then dispatch a Haiku subagent per article file (same prompt as v2 base-tier path), collect into `summaries_hop{N}.json` with shape `{"topic": "{project name}", "items": [...]}`. Leave each summary's `media_refs` empty -- media assets are already inlined into the rewritten article content as Obsidian embeds during Stage 4c, so the write stage picks them up directly from the per-hop fetch_results without needing a separate manifest.
+
+### 4e. Hop-planner (parallel per-topic)
+
+For each active topic at this hop level, dispatch the hop-planner agent (Sonnet):
+
 - `subagent_type`: `general-purpose`
-- `model`: `haiku`
-- `prompt`: The full contents of `agents/search-agent.md`, followed by a `---` separator, followed by:
+- `model`: `sonnet`
+- `prompt`: The full contents of `agents/hop-planner.md`, followed by `---`, followed by:
 
 ```
-topic: {topic string}
-existing_urls: {JSON array of URLs from existing_urls}
-priority: {priority}
+topic: {topic.topic}
+depth: {topic.depth}
+current_hop: {hop_level}
+max_hops: {topic.max_hops}
+confidence_target: {get_depth_profile(topic.depth)["confidence_target"]}
+summaries_so_far: {path to all summaries this topic has collected across all hops}
+sources_so_far: {path to all sources this topic has collected}
+hop_genealogy: {topic.hop_genealogy as JSON}
+seen_urls: {topic.seen_urls}
+vault_index_path: {VAULT}/.research-workflow/vault_index.db
+scripts_dir: SCRIPTS
 ```
 
-For small batches (5 or fewer topics), dispatch all search agents in parallel by issuing multiple Task calls at once. For larger batches, dispatch in groups of 5 to avoid overwhelming the system.
+Parse each hop-planner response. **Apply the full transition atomically via `apply_hop_decision()`** -- never via the per-field setters in this stage. The atomic helper persists genealogy + current_hop + confidence_history + contradiction_rate + next_hop / replan_hint / status in a single load -> mutate -> save cycle, so a crash partway through the transition cannot leave a topic with mismatched state (hop recorded but quality signals stale, status updated but routing stale, etc.).
 
-### 3b. Merge SearXNG results (full tier only)
-
-If `SEARXNG_AVAILABLE` is true, also run for each topic via Bash:
-```bash
-python "SCRIPTS/search_searxng.py" --query "{topic}" --url "SEARXNG_URL" --output "STATE_DIR/searxng_{index}.json"
-```
-
-Merge SearXNG results into the search agent results, deduplicating by URL.
-
-### 3c. Collect and deduplicate
-
-Collect all `selected_urls` arrays from all search agent responses. Deduplicate URLs across all topics (case-insensitive, trailing-slash agnostic).
-
-Build a combined `search_context` object:
-```json
-{
-  "topic": "{project name}",
-  "selected_urls": [{combined deduplicated list}],
-  "rejected_urls": [{combined list}],
-  "search_notes": "{combined notes from all agents}",
-  "per_topic_results": [{original per-topic results for traceability}]
-}
-```
-
-### 3d. Save search results
-
-Write `search_context.json` to `STATE_DIR/` using the Write tool.
-
-Update state:
-```bash
-python -c "
-import sys
-sys.path.insert(0, 'SCRIPTS')
-from state import update_stage, save_stage_output
-from pathlib import Path
-update_stage(Path('STATE_DIR'), 'fetch')
-"
-```
-
----
-
-## Stage 4: Fetch
-
-Run via Bash:
-```bash
-python "SCRIPTS/fetch_and_clean.py" --input "STATE_DIR/search_context.json" --output "STATE_DIR/fetch_results.json"
-```
-
-Wait for completion. Read `STATE_DIR/fetch_results.json`.
-
-**If `fetched` is empty and `failed` is non-empty:**
-Output: `Fetch failed for all URLs. Errors: {list of failed[].error}`
-Abandon the run and stop.
-
-**If `failed` is non-empty but `fetched` is not empty:**
-Log a warning: `Warning: Could not fetch {count} URL(s): {list of failed[].url}`
-Continue.
-
-**If the script exits non-zero:**
-Output stderr and stop.
-
-Update state:
-```bash
-python -c "
-import sys
-sys.path.insert(0, 'SCRIPTS')
-from state import update_stage, save_stage_output
-from pathlib import Path
-update_stage(Path('STATE_DIR'), 'media')
-"
-```
-
----
-
-## Stage 5: Media
-
-For each entry in `fetch_results.fetched`, process media references.
-
-### 5a. Extract and download media per article
-
-For each fetched article, write its content to a temporary file, then run via Bash:
-```bash
-python "SCRIPTS/fetch_media.py" --content "STATE_DIR/content_{index}.md" --assets-dir "ASSETS_DIR" --topic "{topic_slug}" --run-id "{RUN_ID}" --output "STATE_DIR/rewritten_{index}.md"
-```
-
-This script:
-1. Scans content for image/PDF/video references
-2. Downloads images and PDFs to `ASSETS_DIR/{topic_slug}/`
-3. Rewrites markdown references to use Obsidian embed syntax (`![[path]]`)
-4. Skips video URLs (logged for future yt-dlp support)
-
-Replace the original `content` in `fetch_results` with the rewritten content from the output file.
-
-### 5b. Collect media manifest
-
-After processing all articles, collect all downloaded media info into a manifest and save:
 ```bash
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from state import update_stage, save_stage_output
+from state import apply_hop_decision
 from pathlib import Path
-update_stage(Path('STATE_DIR'), 'summarize')
-save_stage_output(Path('STATE_DIR'), 'media_manifest', MANIFEST_JSON)
+state_dir = Path('STATE_DIR')
+# HOP_PLANNER_RESPONSE is the parsed JSON from this topic's hop-planner dispatch
+# HOP_DATA is the just-completed hop's record (hop number, pattern, queries, sources_kept, ended_at, ...)
+decision = HOP_PLANNER_RESPONSE['decision']  # one of: continue, stop, replan
+# early_terminated is a special form of stop set when Stage 4a's alternate-pattern
+# attempt also failed; the hop-planner doesn't emit it directly -- the orchestrator
+# substitutes it before calling apply_hop_decision.
+apply_hop_decision(
+    state_dir,
+    topic_name='TOPIC',
+    hop_data=HOP_DATA,
+    decision=decision,
+    confidence_score=HOP_PLANNER_RESPONSE['confidence_score'],
+    contradiction_rate=HOP_PLANNER_RESPONSE['contradiction_rate'],
+    next_hop=HOP_PLANNER_RESPONSE.get('next_hop'),       # used only when decision='continue'
+    replan_hint=HOP_PLANNER_RESPONSE.get('replan_hint'), # used only when decision='replan'
+)
 "
 ```
 
-If any articles had no media to process, that is fine -- continue regardless.
+What each decision atomically does (all three branches always persist confidence + contradiction_rate from the hop-planner response, in addition to the branch-specific writes):
+
+- `continue`: appends `hop_data` to genealogy, increments `current_hop`, appends `confidence_score` to history, overwrites `contradiction_rate`, sets `next_hop` to the planner's pick, clears `replan_hint`, leaves status `active`.
+- `stop`: appends `hop_data`, increments `current_hop`, appends `confidence_score`, overwrites `contradiction_rate`, clears `next_hop`, sets status `complete`.
+- `early_terminated` (orchestrator-substituted when Stage 4a's alternate-pattern attempt produced zero usable sources): same as `stop` but sets status `early_terminated`.
+- `replan`: appends `hop_data`, increments `current_hop`, appends `confidence_score`, overwrites `contradiction_rate`, clears `next_hop`, sets `replan_hint` to the planner's diagnosis, sets status `replan_pending`. Stage 5 handles re-admission.
+
+Stage 4f no longer exists -- quality signals are now part of the atomic 4e transition.
+
+### 4f. Stage transition
+
+When all topics have status != "active", transition to Stage 5:
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import update_stage
+from pathlib import Path
+update_stage(Path('STATE_DIR'), 'quality_gate')
+"
+```
 
 ---
 
-## Stage 6: Summarize
+## Stage 5: Quality Gate
 
-### If Ollama is available (mid or full tier):
+After all topics have status != "active", compute the run-level quality signals and decide whether to proceed to classify, auto-replan, or prompt the user.
 
-Run via Bash:
+### 5a. Compute per-topic pass/fail
+
+Each topic has its own depth and therefore its own `confidence_target` (via `get_depth_profile(topic.depth)["confidence_target"]`). Check per-topic, not run-aggregate:
+
+```python
+from confidence import get_depth_profile
+
+def topic_passes(t) -> bool:
+    target = get_depth_profile(t["depth"])["confidence_target"]
+    latest_conf = t["confidence_history"][-1] if t["confidence_history"] else 0.0
+    return latest_conf >= target and t["contradiction_rate"] <= 0.3
+
+failing_topics = [t for t in run["topics"] if not topic_passes(t)]
+```
+
+If `failing_topics` is empty: proceed to Stage 6 (classify).
+
+For diagnostic display and the low-confidence note marker, also compute a "worst-case confidence" proxy across the run:
+
+```python
+worst_confidence = min(
+    (t["confidence_history"][-1] if t["confidence_history"] else 0.0
+     for t in run["topics"]),
+    default=0.0,
+)
+```
+
+This is the value used downstream as `OVERALL_CONFIDENCE` in Stage 5c's user-decision payload and 5d's `final_confidence_score`. There is no single "run target" because depths are per-topic, but the worst-topic confidence is the meaningful number to surface in user prompts and frontmatter callouts.
+
+### 5b. Auto-replan (if eligible)
+
+If `failing_topics` is non-empty AND `replan_count < 2`, run an auto-replan cycle:
+
+1. For each failing topic, decide its hint:
+   - If the topic has a stored `replan_hint` from a hop-planner `decision: "replan"`: use it directly.
+   - Otherwise: synthesize a hint pointing at the gap (e.g., `{"issue": "thin sources", "suggested_pattern": "entity_expansion", "suggested_query_focus": "official agency data"}`).
+2. **Re-admit each failing topic into the hop loop.** A topic that exhausted its initial budget has `current_hop == max_hops`, so Stage 4's admission filter (`current_hop < max_hops`) would otherwise skip it. The re-admission needs to set the hint, bump `max_hops` by 1, mark status `active`, increment `replan_count`, and roll the stage marker back to `hop_loop` -- **all in a single atomic state transition**. Use `apply_replan_readmit()`: a crash partway through must not leave the run with topics flagged active but stage stuck at `quality_gate`.
+3. Return to Stage 4 (the hop loop runs one more pass; only re-admitted topics dispatch search/fetch/summarize/hop-planner). Stage 4a's search-agent reads `topic.replan_hint` to bias the next query toward the suggested pattern/focus.
+
 ```bash
-python "SCRIPTS/summarize.py" --input "STATE_DIR/fetch_results.json" --model "RECOMMENDED_MODEL" --output "STATE_DIR/summaries.json"
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import apply_replan_readmit
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+# For each failing topic, pass either its existing replan_hint or a freshly
+# synthesized one. Pass None to preserve any existing hint without overwriting.
+specs = [
+    {'topic_name': t['topic'],
+     'replan_hint': SYNTHESIZED_HINT_OR_t['replan_hint']}
+    for t in FAILING_TOPICS
+]
+apply_replan_readmit(state_dir, specs)
+"
 ```
 
-Read the output file.
+`apply_replan_readmit` does the full transition (set replan_hint, bump max_hops, mark active, increment replan_count, set stage='hop_loop') in one load->mutate->save cycle. Do not call the per-field setters here -- they're not crash-safe across multiple writes.
 
-### If Ollama is NOT available (base tier):
+### 5c. User prompt (auto-replan exhausted)
 
-Run via Bash:
+If `replan_count >= 2`, present the diagnostic. There are two sub-cases:
+
+- **First time the user sees this prompt** (`replan_count == 2`): the two auto-replan attempts have completed and the user can opt into one more focused cycle (`replan`), accept lower-confidence notes (`continue`), or stop (`abandon`).
+- **After the user-driven `replan` already fired** (`replan_count >= 3`): no more replans are allowed -- the gate has now spent the initial budget plus two auto-replans plus one user-approved replan. Present only `continue` and `abandon`.
+
+The branch is `>= 2` (not `== 2`) deliberately: this catches the post-manual-replan re-entry to the gate. Without it, a third quality-gate failure would fall through both 5b's `replan_count < 2` guard and the old `== 2` check, leaving the pipeline stuck.
+
+```
+⚠ Quality gate triggered after {replan_count} replan attempts.
+
+Topic-by-topic results:
+{for each topic:}
+  - {topic.topic}: confidence {topic.confidence_history[-1]:.2f}, contradictions {topic.contradiction_rate:.0%}
+{end}
+
+Weakest topics:
+{for each weak topic:}
+  - "{topic}": {gap description}
+{end}
+
+Options:
+{if replan_count == 2:}
+  - replan: try one more cycle with focused hints (1 extension max)
+{end}
+  - continue: write notes anyway, with low-confidence flags
+  - abandon: stop here, preserve search/fetch results for inspection
+```
+
+**After `replan_count >= 3`, the user is offered only `continue` or `abandon` -- no more replans.** Do not present `replan` as an option in that case; reject it if the user types it anyway and re-prompt.
+
+Wait for the user's response.
+
+Record the decision:
+
 ```bash
-python "SCRIPTS/summarize.py" --input "STATE_DIR/fetch_results.json" --prepare-for-claude --output-dir "STATE_DIR/summaries/"
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import record_user_decision
+from pathlib import Path
+record_user_decision(Path('STATE_DIR'), decision='DECISION_VALUE', confidence=OVERALL_CONFIDENCE)
+"
 ```
 
-This writes one file per article to `STATE_DIR/summaries/`. For each file, dispatch a Haiku subagent via the Task tool:
-- `subagent_type`: `general-purpose`
-- `model`: `haiku`
-- `prompt`: Read the file content, then append:
+Branch by decision:
 
-```
----
-Summarize this article. Return a single JSON object with these fields:
-- summary: ~500 token distillation of the key facts and arguments
-- source_type: one of "government", "journalism", "academic", "advocacy", "other"
-- key_entities: array of named people, organizations, legislation, programs
-- key_claims: array of notable factual assertions worth citing
+- **`replan`** (only valid when `replan_count == 2`): apply the same re-admission recipe as Stage 5b via the atomic helper (`apply_replan_readmit`). For each failing topic, if its `replan_hint` is None, synthesize one (the user may also supply a manual hint via free-text input -- capture it as the `issue` field). Then dispatch the helper once with all specs:
 
-First character must be {. Last character must be }. No backticks, no narration.
-```
-
-Collect all summaries into a combined `summaries.json` and write it to `STATE_DIR/`.
-
-### Save summary output
-
-Build the summaries object in the format expected by the classify agent:
-```json
-{
-  "topic": "{project name}",
-  "items": [
-    {
-      "url": "...",
-      "title": "...",
-      "summary": "...",
-      "source_type": "...",
-      "key_entities": [],
-      "key_claims": [],
-      "media_refs": []
-    }
+  ```bash
+  python -c "
+  import sys
+  sys.path.insert(0, 'SCRIPTS')
+  from state import apply_replan_readmit
+  from pathlib import Path
+  state_dir = Path('STATE_DIR')
+  specs = [
+      {'topic_name': t['topic'],
+       'replan_hint': SYNTHESIZED_HINT_OR_t['replan_hint']}
+      for t in FAILING_TOPICS
   ]
-}
+  apply_replan_readmit(state_dir, specs)
+  "
+  ```
+
+  This bumps `replan_count` to 3 in the same atomic save that re-admits the topics and rolls `stage` back to `hop_loop`. Return to Stage 4. After this attempt, no more replans -- if it fails again, re-enter Stage 5c with `replan_count == 3` and present only continue / abandon.
+- **`continue`**: mark the run with `low_confidence = true` (see 5d). Proceed to Stage 6. The write stage adds body callouts to all written notes.
+- **`abandon`**: set `abandoned_at_gate: true` in the run dict, save, then call `abandon_run(STATE_DIR)` (which already exists in state.py and archives via `_archive_run`). Print the archived path so the user can inspect:
+
+  ```bash
+  python -c "
+  import sys
+  sys.path.insert(0, 'SCRIPTS')
+  from state import load_run, save_state, abandon_run
+  from pathlib import Path
+  state_dir = Path('STATE_DIR')
+  run = load_run(state_dir)
+  if run is not None:
+      run['abandoned_at_gate'] = True
+      save_state(state_dir, run)
+  abandon_run(state_dir)
+  "
+  ```
+
+  The archived files land under `STATE_DIR/history/{run_id}/` (the existing `_archive_run` destination). Print that path to the user.
+
+### 5d. Save low-confidence flag
+
+If decision was `continue`:
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+run['low_confidence'] = True
+run['final_confidence_score'] = OVERALL_CONFIDENCE
+save_state(Path('STATE_DIR'), run)
+"
 ```
 
-Populate `media_refs` from the media manifest for each article (match by URL).
+---
 
-Write to `STATE_DIR/summaries.json` and update state:
+## Stage 6: Classify
+
+Transition stage first:
+
 ```bash
 python -c "
 import sys
@@ -464,11 +732,26 @@ update_stage(Path('STATE_DIR'), 'classify')
 "
 ```
 
----
+### 6a. Aggregate per-hop summaries
 
-## Stage 7: Classify
+Before dispatching the classify agent, aggregate all per-hop summary files into a single `summaries.json`:
 
-### 7a. Dispatch classify agent
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+all_summaries = []
+for hop_file in sorted(state_dir.glob('summaries_hop*.json')):
+    data = json.loads(hop_file.read_text())
+    all_summaries.extend(data.get('items', []))
+combined = {'topic': '{project_name}', 'items': all_summaries}
+(state_dir / 'summaries.json').write_text(json.dumps(combined, indent=2))
+"
+```
+
+### 6b. Dispatch classify agent
 
 Read the agent definition: `REPO/agents/classify-agent.md`
 
@@ -479,43 +762,75 @@ Dispatch via the Task tool:
 
 ```json
 {
-  "summaries": {the summaries object from Stage 6},
+  "summaries": {the aggregated summaries object from 6a},
   "vault_root": "VAULT",
   "scripts_dir": "SCRIPTS",
   "shared_context_files": {from the research plan}
 }
 ```
 
-### 7b. Parse classification
+### 6c. Parse classification
 
 The agent returns a single JSON object. Parse it to extract:
 - `notes_to_create` -- list of note specs with `title`, `filename`, `folder`, `action`, `type`, `write_model`, `content_summary`, `source_urls`, `tags`, `links`, `stub_links`, `media`, `priority`
 - `vault_context` -- `existing_notes_found`, `suggested_moc_update`, `folder_conventions`
+- `contradictions_detected` -- list of `{source_a, source_b, claim_a, claim_b, topic}` objects flagging where sources disagree (Phase 5 addition). May be empty.
 
 If `notes_to_create` is empty:
 Output: `Classification returned no notes to create. Check fetch results for content quality.`
 Complete the run and stop.
 
-### 7c. Save classification
+### 6d. Save classification
 
-Write to `STATE_DIR/classification.json` and update state:
+Persist the parsed classify-agent response to `STATE_DIR/classification.json` so Stage 7's resume contract can find it, then advance the stage:
+
 ```bash
 python -c "
-import sys
+import sys, json
 sys.path.insert(0, 'SCRIPTS')
 from state import update_stage, save_stage_output
 from pathlib import Path
-update_stage(Path('STATE_DIR'), 'write')
+state_dir = Path('STATE_DIR')
+# CLASSIFICATION_JSON is the parsed JSON object from the classify-agent dispatch in 6b/6c.
+save_stage_output(state_dir, 'classification', CLASSIFICATION_JSON)
+update_stage(state_dir, 'write')
 "
 ```
 
+Substitute `CLASSIFICATION_JSON` with the parsed dict from Stage 6c, serialized as a Python dict literal.
+
 ---
 
-## Stage 8: Write Notes
+## Stage 7: Write Notes
 
 This is the core stage. **You (the Sonnet orchestrator) write the notes.** For synthesis notes, you escalate to Opus.
 
-### 8a. Sort notes by priority tier
+### 7a. Aggregate per-hop fetch results
+
+Stage 4 produces one `fetch_results_hop{N}.json` per hop. Before writing notes, merge them into a single url -> content lookup so 7c.iii (full-source-content recovery) doesn't have to re-glob and re-parse per note. **Write atomically via temp+rename** so a crash mid-write cannot leave a corrupt JSON file on disk — the Resume Flow only rebuilds when the file is missing or unparseable, not when it merely looks "present":
+
+```bash
+python -c "
+import sys, json
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+url_to_entry = {}
+for hf in sorted(state_dir.glob('fetch_results_hop*.json')):
+    data = json.loads(hf.read_text())
+    for entry in data.get('fetched', []):
+        # later hops win on URL collisions (same URL re-fetched gets the freshest content)
+        url_to_entry[entry['url']] = entry
+combined = {'fetched': list(url_to_entry.values()), 'by_url': url_to_entry}
+target = state_dir / 'fetch_results_aggregated.json'
+tmp = target.with_suffix('.tmp')
+tmp.write_text(json.dumps(combined, indent=2), encoding='utf-8')
+tmp.replace(target)
+"
+```
+
+The aggregated file has the same `{"fetched": [...]}` shape as the v2 monolithic `fetch_results.json`, plus a convenience `by_url` index for O(1) lookups. Stage 7c.iii reads from this file.
+
+### 7b. Sort notes by priority tier
 
 Order the `notes_to_create` list:
 1. `primary` (deep coverage) -- Tier 1 notes first
@@ -524,7 +839,7 @@ Order the `notes_to_create` list:
 
 Writing Tier 1 first ensures that Tier 2 and Tier 3 notes can reference them with wikilinks.
 
-### 8b. For each note, in order:
+### 7c. For each note, in order:
 
 #### i. Check for mtime conflict
 
@@ -557,7 +872,9 @@ Read all files listed in `vault_context.existing_notes_found` using the Read too
 
 #### iii. Read full source content
 
-For each URL in this note's `source_urls`, find the matching entry in `fetch_results.fetched` and get its full `content`. This is the source material for writing.
+For each URL in this note's `source_urls`, look it up in `STATE_DIR/fetch_results_aggregated.json` (produced by Stage 7a) -- use the `by_url` index for O(1) access, or scan `fetched[]` if you prefer. Get the full `content` field of the matching entry. This is the source material for writing.
+
+If a `source_urls` entry has no match in the aggregated file (e.g., the URL was selected by the search agent but fetch_and_clean.py failed to retrieve it), skip that URL and log a warning. Continue writing the note using the URLs that did fetch successfully.
 
 #### iv. Determine model
 
@@ -578,7 +895,25 @@ source: ["{source_urls joined}"]
 created: {today's date, YYYY-MM-DD}
 write_model: {sonnet or opus}
 research_run: {RUN_ID}
+confidence: {topic.confidence_history[-1] or 1.0 if single-hop}
+contradictions_noted: {true if this note's sources appear in contradictions_detected else false}
+primary_sources: {count of sources where is_primary == true}
+hop_genealogy: [{list of pattern(from) strings for multi-hop runs, omitted for single-hop}]
 ---
+```
+
+**Body callouts (NEW for v3):**
+
+If `run.low_confidence == true`, prepend this callout to the note body BEFORE the H1:
+
+```
+> ⚠ **Research confidence: {run.final_confidence_score:.2f}**. Several topics in this run did not reach the standard confidence target. Verify claims before citing.
+```
+
+If any contradiction in `classification.contradictions_detected` references a source URL that overlaps with this note's `source_urls`, prepend (or merge with the prior callout) a contradiction callout:
+
+```
+> ⚠ **Source contradictions noted.** Two or more sources disagree on aspects of this topic. See `## Sources` section for details.
 ```
 
 **Wikilinks:**
@@ -596,6 +931,15 @@ research_run: {RUN_ID}
 **Sources:**
 - Include the full source URL as an inline link at the point where it is first referenced in the body text.
 - Add a `## Sources` section at the bottom listing all source URLs.
+- In the Sources list, annotate each URL inline with tier and contradiction notes. Match contradictions by URL: any source URL that appears in a `contradictions_detected[].source_a` or `source_b` gets the contradiction annotation:
+
+  ```
+  ## Sources
+
+  - https://source-a/ (T1) -- claims X
+  - https://source-b/ (T2) -- claims Y (contradicts source-a on Z)
+  ```
+
 - Every factual claim from external research must be traceable to its source.
 
 **Format matching:**
@@ -603,7 +947,8 @@ research_run: {RUN_ID}
 - If the target `folder` contains existing notes (from `vault_context`), match their section structure and style.
 
 **Media embeds:**
-- If the note's `media` list is non-empty, embed media assets using Obsidian syntax: `![[path/to/asset]]` at the appropriate point in the content.
+- Media embeds are already inlined into the source article content during Stage 4c (`fetch_media.py` rewrites the article body to include `![[path/to/asset]]` references in place). When composing the note body from the source content, preserve any `![[path]]` references found there -- do not strip them.
+- Do not add new embeds from the classification's `note.media` field; that field is empty by design in v3 (the manifest-based media flow was replaced by inline embeds). The field is retained in the classification schema for backwards compatibility with v2 vault notes only.
 
 **Content:**
 - For `create`: Write the complete note from scratch using the fetched source content and `content_summary` as your guide.
@@ -639,7 +984,7 @@ update_stage(Path('STATE_DIR'), 'write', {'total_notes': TOTAL, 'completed': COM
 "
 ```
 
-### 8c. Update MOC files
+### 7d. Update MOC files
 
 After all notes are written:
 
@@ -649,11 +994,21 @@ After all notes are written:
 
 ---
 
-## Stage 8d: Wikilink Scan
+## Stage 8: Wikilink Scan
 
-After all notes and MOCs are written, scan for wikilink opportunities between the new notes and existing project notes.
+After all notes and MOCs are written, scan for wikilink opportunities between the new notes and existing project notes. Transition stage first:
 
-### 8d-i. Refresh vault index
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import update_stage
+from pathlib import Path
+update_stage(Path('STATE_DIR'), 'wikilink_scan')
+"
+```
+
+### 8a. Refresh vault index
 
 ```bash
 python -c "
@@ -668,11 +1023,11 @@ print(json.dumps(stats))
 
 This ensures the newly written notes are indexed before the scanner queries the vault.
 
-### 8d-ii. Determine project folder
+### 8b. Determine project folder
 
 From the written notes list, extract the common parent folder. For example, if notes were written to `Projects/Activism/BJU/Bob Jones University.md` and `Projects/Activism/BJU/GRACE Report on Bob Jones University.md`, the project folder is `Projects/Activism/BJU`.
 
-### 8d-iii. Dispatch wikilink-scanner agent
+### 8c. Dispatch wikilink-scanner agent
 
 Read the agent definition: `REPO/agents/wikilink-scanner.md`
 
@@ -702,7 +1057,7 @@ Dispatch via the Task tool:
 }
 ```
 
-### 8d-iv. Parse and apply edits
+### 8d. Parse and apply edits
 
 The agent returns a JSON object with `edits` and `stats`.
 
@@ -712,7 +1067,7 @@ For each edit in the `edits` array:
 3. Replace it with `edit.replace` using the Edit tool
 4. If the `find` text is not found (perhaps already wikilinked or content changed), skip it and log a warning
 
-### 8d-v. Report results
+### 8e. Report results
 
 Log the results:
 ```
@@ -723,7 +1078,7 @@ Wikilink scan: {stats.total_edits} edits applied
 
 If no edits were needed, log: `Wikilink scan: no new wikilinks needed.`
 
-### 8d-vi. Update state
+### 8f. Update state
 
 ```bash
 python -c "
@@ -737,7 +1092,7 @@ update_stage(Path('STATE_DIR'), 'discover')
 
 ---
 
-## Stage 9: Discover
+## Stage 9: Discover Threads
 
 ### 9a. Dispatch thread-discoverer agent
 
@@ -800,47 +1155,120 @@ If threads are approved, save them to `STATE_DIR/approved_threads.json` for a fo
 
 ## Stage 10: Complete
 
-### 10a. Complete the run
+**Important sequencing:** `complete_run()` archives the state file (moves it under `history/{run_id}/`), so any `load_run()` call AFTER `complete_run()` returns `None`. Stage 10's telemetry, hop genealogy print, and case-record write must all use the dict returned BY `complete_run()` -- not call `load_run()` after the fact.
+
+### 10a. Complete the run (capture final state)
 
 ```bash
 python -c "
-import sys
+import sys, json
 sys.path.insert(0, 'SCRIPTS')
 from state import complete_run
 from pathlib import Path
-complete_run(Path('STATE_DIR'))
+final = complete_run(Path('STATE_DIR'))
+print(json.dumps(final))
 "
 ```
 
+Parse the printed JSON. This is the FINAL run dict (with `completed_at` set). The state file has been moved to history at this point -- do NOT call `load_run` again.
+
+Write the `final` JSON to a temp file (e.g., `STATE_DIR/../tmp/final_run.json`) so Stage 10c can re-read it without depending on shell-variable passing.
+
 ### 10b. Print summary
 
-Collect all information from the pipeline and print:
+Using the `final` dict from 10a, format and print:
 
 ```
 Research complete: {project}
 
-Created:
-  - {path of each created note}
+Created ({count} notes):
+{for each:}
+  - {path} (confidence {confidence})
+{end}
 
 Updated:
-  - {path of each updated note and MOC, or "none"}
+{for each updated note/MOC:}
+  - {path}
+{end}
 
-Skipped:
-  - {any notes skipped due to mtime conflict}
+Hop genealogy:
+{for each topic:}
+  Topic: {topic} ({hop_count} hops, confidence {confidence}{", " + status if status != "complete"})
+  {for each hop in genealogy:}
+    Hop {n} ({pattern or "initial"}): {sources_kept} sources kept
+  {end}
+{end}
 
-Warnings:
-  - {fetch failures}
-  - {media download failures}
-  - {any other errors collected during the run}
+Model usage:
+  Haiku:   {haiku.calls} calls,  {haiku.in_tokens:,} in / {haiku.out_tokens:,} out
+  Sonnet:  {sonnet.calls} calls, {sonnet.in_tokens:,} in / {sonnet.out_tokens:,} out
+  Opus:    {opus.calls} call(s), {opus.in_tokens:,} in / {opus.out_tokens:,} out
+  Ollama: {ollama.calls} calls (local -- no token cost)
+
+Estimated cost: ${estimated_cost:.2f}
+
+{if low_confidence:}
+⚠ Low confidence run (score {final_confidence_score}). Notes marked with low-confidence callouts.
+{end}
 
 {if threads approved:}
 Threads queued for follow-up:
-  - {list of approved thread topics}
+  - {topic} (priority: {priority})
   Run /research again to execute these.
 {end}
 
-Tier: {TIER} | Sources fetched: {count} | Notes written: {count}
+Tier: {TIER} | Sources fetched: {total} | Notes written: {count} | Replans: {replan_count}
 ```
+
+Cost estimation (rough):
+- Haiku: $0.25/M input + $1.25/M output
+- Sonnet: $3/M input + $15/M output
+- Opus: $15/M input + $75/M output
+
+Sum across models for the estimate.
+
+### 10c. Write case record
+
+Using the same `final` dict from 10a (do NOT re-read state -- it's archived already):
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import write_case_record
+from pathlib import Path
+cases_dir = Path('CASES_DIR')
+
+# 'final' was captured from complete_run() in stage 10a; pass it via stdin or a temp file
+import json as _json
+final = _json.loads(open('FINAL_JSON_TEMP_FILE').read())
+
+case = {
+    'case_id': final['run_id'],
+    'version': 1,
+    'query': 'PROJECT_NAME',
+    'domain_tags': DERIVED_TAGS,
+    'strategy_used': final.get('strategy', 'unified'),
+    'depths_used': {d: sum(1 for t in final['topics'] if t.get('depth') == d)
+                    for d in ['quick','standard','deep','exhaustive']},
+    'hops_executed': sum(len(t.get('hop_genealogy', [])) for t in final['topics']),
+    'confidence_per_topic': {t['topic']: (t['confidence_history'][-1] if t.get('confidence_history') else None)
+                             for t in final['topics']},
+    'contradiction_rate': max((t.get('contradiction_rate', 0.0) for t in final['topics']), default=0.0),
+    'patterns_that_worked': PATTERNS_WORKED,
+    'patterns_that_failed': PATTERNS_FAILED,
+    'outcomes': {
+        'sources_processed': SOURCES_COUNT,
+        'notes_created': CREATED_COUNT,
+        'notes_updated': UPDATED_COUNT,
+        'user_decisions': final.get('user_decisions', []),
+    },
+}
+write_case_record(cases_dir, case)
+"
+```
+
+The orchestrator writes `final` to a temp JSON file between 10a and 10c (typical pattern: write the captured JSON to `STATE_DIR/../tmp/final_run.json` for the duration of 10b/10c, then delete). DERIVED_TAGS comes from the most common tags across written notes. PATTERNS_WORKED / PATTERNS_FAILED come from per-hop telemetry (patterns that produced novel notes vs. dead ends).
 
 ---
 
@@ -864,7 +1292,13 @@ Throughout the pipeline, follow these principles:
 
 When resuming a run (Stage 1 detected an active run and the user chose "Resume"):
 
-1. Read `current_run.json` to find the current `stage`.
-2. Load any saved stage outputs (`research_plan.json`, `search_context.json`, `fetch_results.json`, `summaries.json`, `classification.json`, `written_notes.json`) from `STATE_DIR/`.
-3. Skip to the recorded stage. For the `write` stage specifically, check `written_notes.json` to determine which notes are already complete and skip them.
+1. Read `current_run.json` to find the current `stage` -- one of `triage`, `resolve`, `hop_loop`, `quality_gate`, `classify`, `write`, `wikilink_scan`, `discover`, `complete`.
+2. Load any saved stage outputs from `STATE_DIR/`:
+   - `research_plan.json` (from Stage 3)
+   - `search_context_hop{N}.json` and `fetch_results_hop{N}.json` (per-hop, from Stage 4)
+   - `summaries_hop{N}.json` (per-hop, from Stage 4d) and aggregated `summaries.json` (from Stage 6a)
+   - `classification.json` (from Stage 6d)
+   - `fetch_results_aggregated.json` (from Stage 7a -- regenerate if missing OR if loading it raises `JSONDecodeError` on resume into the write stage)
+   - `written_notes.json` (from Stage 7)
+3. Skip to the recorded stage. For the `hop_loop` stage, the topics' `current_hop` and `status` fields determine which active topics still need processing -- only un-completed topics dispatch through Stage 4 again. For the `write` stage specifically, check `written_notes.json` to determine which notes are already complete and skip them. If `fetch_results_aggregated.json` is missing OR `json.loads()` on its contents raises `JSONDecodeError` (the prior run crashed mid-write before the temp+rename completed), re-run the Stage 7a aggregation snippet -- it's a pure function of the existing per-hop files, so regeneration is safe.
 4. Continue the pipeline from that point.

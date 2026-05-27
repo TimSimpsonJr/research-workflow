@@ -91,6 +91,15 @@ def check_whisper() -> dict:
         return {"installed": False, "backend": None}
 
 
+def check_playwright() -> dict:
+    """Detect whether Playwright is available for JS-heavy page extraction."""
+    try:
+        import playwright  # noqa: F401
+        return {"status": "ok"}
+    except ImportError:
+        return {"status": "missing", "reason": "playwright package not installed"}
+
+
 def get_platform_info() -> dict:
     """Get basic platform info for install recommendations."""
     return {
@@ -182,6 +191,7 @@ def build_tier_report(searxng_url: str | None, repo_root: Path | None = None) ->
         },
         "ytdlp": {"status": "ok" if ytdlp.get("installed") else "missing"},
         "whisper": {"status": "ok" if whisper.get("installed") else "missing"},
+        "playwright": check_playwright(),
     }
 
     if ollama.get("running") and ollama.get("models"):

@@ -327,10 +327,14 @@ def main() -> None:
         print(f"[summarize] Wrote {len(entries)} file(s) to {output_dir}", file=sys.stderr)
     else:
         summaries = summarize_batch(fetch_results, args.model, args.ollama_url)
+        # Emit `items` (not `summaries`) so the output shape matches the
+        # classify-agent input contract and the per-hop aggregation in
+        # SKILL.md Stage 6a (which globs `summaries_hop*.json` and reads
+        # `data.get("items", [])`).
         result = {
             "mode": "ollama",
             "model": args.model,
-            "summaries": summaries,
+            "items": summaries,
             "stats": {
                 "total": len(fetch_results.get("fetched", [])),
                 "summarized": len(summaries),

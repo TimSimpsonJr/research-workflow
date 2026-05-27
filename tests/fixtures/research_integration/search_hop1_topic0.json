@@ -1,0 +1,50 @@
+{
+  "topic": "Test topic about Flock Safety",
+  "depth": "quick",
+  "queries_used": [
+    "Flock Safety ALPR program site:.gov",
+    "Flock Safety surveillance contract policy"
+  ],
+  "selected_urls": [
+    {
+      "url": "https://www.eff.org/deeplinks/flock-safety-alpr-report",
+      "title": "EFF: Flock Safety ALPR Surveillance Report",
+      "snippet": "Detailed investigation of Flock Safety's automated license plate reader network and its civil liberties implications.",
+      "relevance_score": 0.94,
+      "credibility_score": 0.92,
+      "tier": "T1",
+      "is_primary": false,
+      "primary_type": null,
+      "reason": "High-credibility secondary investigative report from a recognized civil liberties organization."
+    },
+    {
+      "url": "https://flocksafety.com/transparency",
+      "title": "Flock Safety -- Transparency Report",
+      "snippet": "Flock Safety's official transparency disclosures including law enforcement partnerships and data retention policies.",
+      "relevance_score": 0.88,
+      "credibility_score": 0.78,
+      "tier": "T2",
+      "is_primary": true,
+      "primary_type": "official_statement",
+      "reason": "First-party transparency disclosure from the vendor (company statement about itself)."
+    },
+    {
+      "url": "https://www.brookings.edu/articles/alpr-policy-tradeoffs",
+      "title": "Brookings: Policy Tradeoffs of License Plate Readers",
+      "snippet": "Think-tank analysis of ALPR adoption tradeoffs across jurisdictions.",
+      "relevance_score": 0.71,
+      "credibility_score": 0.74,
+      "tier": "T2",
+      "is_primary": false,
+      "primary_type": null,
+      "reason": "Secondary policy analysis providing comparative jurisdictional context."
+    }
+  ],
+  "rejected_urls": [
+    {
+      "url": "https://random-blog.example.com/flock-rumors",
+      "reason": "Unverified blog post with no sourcing; T4 by credibility."
+    }
+  ],
+  "search_notes": "Found a healthy mix of primary investigative reporting and first-party disclosure for a quick-depth single-hop run."
+}

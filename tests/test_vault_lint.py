@@ -3,12 +3,6 @@
 
 import pytest
 from pathlib import Path
-import os
-
-os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
-os.environ.setdefault("VAULT_PATH", "C:/Users/tim/OneDrive/Documents/Tim's Vault")
-os.environ.setdefault("INBOX_PATH", "C:/Users/tim/OneDrive/Documents/Tim's Vault/Inbox")
-os.environ.setdefault("FRONTMATTER_FIELDS", "title,source,tags,created")
 
 
 def test_parse_frontmatter_valid(tmp_path):
@@ -62,3 +56,27 @@ def test_lint_vault_no_issues(tmp_path):
     )
     issues = lint_vault(tmp_path, required_fields=["title", "source", "tags"])
     assert issues == []
+
+
+def test_vault_lint_rejects_sibling_folder(tmp_path, capsys):
+    """A sibling path that shares a string prefix with the vault root must be rejected."""
+    import sys
+    import subprocess
+    vault = tmp_path / "vault"
+    sibling = tmp_path / "vault2"
+    vault.mkdir()
+    sibling.mkdir()
+    (vault / ".research-workflow").mkdir()
+    (vault / ".research-workflow" / "config.json").write_text(
+        '{"vault_root": "' + str(vault).replace("\\", "/") + '", '
+        '"frontmatter_fields": ["title"], "assets": "assets"}'
+    )
+
+    repo_root = Path(__file__).parent.parent
+    script = repo_root / "scripts" / "vault_lint.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--vault", str(vault), "--folder", "../vault2"],
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 1
+    assert "escapes vault" in (result.stdout + result.stderr).lower()

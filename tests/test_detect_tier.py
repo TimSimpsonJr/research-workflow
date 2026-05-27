@@ -1,5 +1,7 @@
 """Tests for detect_tier.py — infrastructure detection."""
 
+import sys
+
 import pytest
 from unittest.mock import patch, MagicMock
 
@@ -90,3 +92,18 @@ def test_detect_tier_full():
         with patch("detect_tier.check_searxng", return_value={"available": True}):
             tier = detect_tier(searxng_url="http://localhost:8888")
     assert tier == "full"
+
+
+def test_playwright_detection_when_unavailable(monkeypatch):
+    from detect_tier import check_playwright
+    monkeypatch.setitem(sys.modules, "playwright", None)
+    result = check_playwright()
+    assert result["status"] in {"missing", "error"}
+
+
+def test_playwright_detection_when_available(monkeypatch):
+    from detect_tier import check_playwright
+    fake_module = type(sys)("playwright")
+    monkeypatch.setitem(sys.modules, "playwright", fake_module)
+    result = check_playwright()
+    assert result["status"] == "ok"
