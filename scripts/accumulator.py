@@ -196,3 +196,24 @@ def clear_promotion_pending(acc: Accumulator, pattern_id: str) -> None:
 def remove_entry(acc: Accumulator, pattern_id: str) -> None:
     """Remove entry by pattern_id (used after successful graduation)."""
     acc.entries = [e for e in acc.entries if e.pattern_id != pattern_id]
+
+
+def demote(acc: Accumulator, pattern_id: str) -> None:
+    """Demote a previously graduated pattern back into the accumulator.
+    First demotion: status=hold, raised_bar=True, sessions_seen reset to 0.
+    Second demotion: status=rejected (permanent).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    for entry in acc.entries:
+        if entry.pattern_id == pattern_id:
+            entry.demotion_count += 1
+            if entry.demotion_count >= 2:
+                entry.status = "rejected"
+            else:
+                entry.status = "hold"
+                entry.raised_bar = True
+                entry.sessions_seen = 0  # earn it back from scratch under raised bar
+                entry.sessions_since_last_seen = 0
+                entry.promotion_pending = False
+            entry.last_updated_at = now
+            return

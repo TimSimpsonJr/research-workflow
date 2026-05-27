@@ -240,3 +240,37 @@ def test_remove_entry_for_graduation():
     acc = Accumulator(entries=[e])
     remove_entry(acc, "p1")
     assert len(acc.entries) == 0
+
+
+def test_demote_first_time_returns_to_hold_with_raised_bar():
+    """First demotion: status=hold, raised_bar=True, demotion_count=1."""
+    from accumulator import Accumulator, AccumulatorEntry, demote
+    e = AccumulatorEntry(
+        pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], sessions_seen=3, sessions_since_last_seen=0,
+        status="hold", raised_bar=False, promotion_pending=False,
+        demotion_count=0, evidence=[], proposed_promotion_body="",
+        created_at="", last_updated_at="",
+    )
+    acc = Accumulator(entries=[e])
+    demote(acc, "p1")
+    assert acc.entries[0].status == "hold"
+    assert acc.entries[0].raised_bar is True
+    assert acc.entries[0].demotion_count == 1
+    assert acc.entries[0].sessions_seen == 0  # reset for re-graduation count
+
+
+def test_demote_second_time_marks_rejected():
+    """Second demotion: status=rejected (permanent)."""
+    from accumulator import Accumulator, AccumulatorEntry, demote
+    e = AccumulatorEntry(
+        pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], sessions_seen=5, sessions_since_last_seen=0,
+        status="hold", raised_bar=True, promotion_pending=False,
+        demotion_count=1, evidence=[], proposed_promotion_body="",
+        created_at="", last_updated_at="",
+    )
+    acc = Accumulator(entries=[e])
+    demote(acc, "p1")
+    assert acc.entries[0].status == "rejected"
+    assert acc.entries[0].demotion_count == 2
