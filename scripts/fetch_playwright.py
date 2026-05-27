@@ -17,11 +17,13 @@ def fetch_via_playwright(url: str, timeout_ms: int = 15000) -> tuple[str, str]:
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
-            content = page.content()
-            title = page.title() or ""
-            browser.close()
-            return content, title
+            try:
+                page = browser.new_page()
+                page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
+                content = page.content()
+                title = page.title() or ""
+                return content, title
+            finally:
+                browser.close()
     except Exception as e:
         raise RuntimeError(f"playwright fetch failed: {e}") from e
