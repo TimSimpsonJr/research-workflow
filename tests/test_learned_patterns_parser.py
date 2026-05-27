@@ -89,6 +89,41 @@ version: 1
     assert loaded.patterns[0].id == "good-1"
 
 
+def test_parse_skips_malformed_entry_uses_stderr_not_stdout(tmp_path, capsys):
+    """Malformed-entry warnings must go to stderr, not stdout — Stage 2f and
+    Stage 10d expect pure JSON on stdout, and stdout-noise breaks the
+    orchestrator's JSON parse. Regression for codex-impl-review finding
+    json-handshake cluster."""
+    body = """---
+version: 1
+---
+
+## civic / alpr
+
+### Search patterns
+
+- **Good entry** — has all fields.
+  - id: `good-1`
+  - score: 5W / 0L (5 uses)
+  - promoted: 2026-04-15
+  - demotions: 0
+
+- **Bad entry** — missing id.
+  - score: 1W / 0L (1 uses)
+  - promoted: 2026-05-01
+  - demotions: 0
+"""
+    target = tmp_path / "learned_patterns.md"
+    target.write_text(body, encoding="utf-8")
+    loaded, _warnings = load_learned_patterns(target)
+    captured = capsys.readouterr()
+    assert "skipping malformed entry" in captured.err, \
+        "warning must go to stderr"
+    assert "skipping malformed entry" not in captured.out, \
+        "warning must NOT contaminate stdout — would break orchestrator JSON parse"
+    assert len(loaded.patterns) == 1  # good entry still parsed
+
+
 def test_parse_recovers_score_line(tmp_path):
     """Score line `score: 12W / 1L (13 uses)` parses to wins=12, losses=1."""
     body = """---

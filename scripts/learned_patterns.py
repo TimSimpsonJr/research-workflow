@@ -7,6 +7,7 @@ See docs/plans/2026-05-27-v3-1-case-learning-design.md Section 5.3 for schema.
 from __future__ import annotations
 
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -138,7 +139,8 @@ def _parse_learned_patterns(text: str) -> LearnedPatternsFile:
         if "id" not in pending or "score" not in pending:
             print(
                 f"[learned_patterns] skipping malformed entry "
-                f"(missing id or score): {pending.get('name', '?')}"
+                f"(missing id or score): {pending.get('name', '?')}",
+                file=sys.stderr,
             )
             pending = None
             return
@@ -147,7 +149,8 @@ def _parse_learned_patterns(text: str) -> LearnedPatternsFile:
         if not m:
             print(
                 f"[learned_patterns] skipping malformed entry "
-                f"(bad score: {pending['score']!r}): {pending.get('name', '?')}"
+                f"(bad score: {pending['score']!r}): {pending.get('name', '?')}",
+                file=sys.stderr,
             )
             pending = None
             return
