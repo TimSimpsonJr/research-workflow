@@ -233,6 +233,47 @@ def add_usage(state_dir: Path, model: str, in_tokens: int, out_tokens: int, stag
     save_state(state_dir, run)
 
 
+def apply_replan_readmit(
+    state_dir: Path,
+    failing_topic_specs: list[dict],
+    *,
+    increment_replan_counter: bool = True,
+) -> None:
+    """Atomic re-admission for Stage 5b/5c. Re-marks topics active, bumps max_hops,
+    sets replan_hints (when provided), increments replan_count, sets stage='hop_loop'.
+
+    All mutations in one load->mutate->save cycle so a crash during re-admission
+    cannot leave the run with topics flagged active but stage stuck at quality_gate.
+
+    `failing_topic_specs` is a list of dicts shaped:
+        {"topic_name": str, "replan_hint": dict | None}
+
+    If `replan_hint` is None the topic's existing hint is preserved (don't clobber
+    a prior hop-planner replan_hint with None). If `replan_hint` is a dict it
+    overwrites whatever was there.
+
+    Raises KeyError if any topic_name does not exist in the run.
+    Raises RuntimeError if there is no active run.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    topics_by_name = {t["topic"]: t for t in run["topics"]}
+    for spec in failing_topic_specs:
+        name = spec["topic_name"]
+        if name not in topics_by_name:
+            raise KeyError(f"Topic not found: {name}")
+        t = topics_by_name[name]
+        if spec.get("replan_hint") is not None:
+            t["replan_hint"] = spec["replan_hint"]
+        t["max_hops"] += 1
+        t["status"] = "active"
+    if increment_replan_counter:
+        run["replan_count"] += 1
+    run["stage"] = "hop_loop"
+    save_state(state_dir, run)
+
+
 def apply_hop_decision(
     state_dir: Path,
     topic_name: str,

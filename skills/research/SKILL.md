@@ -586,32 +586,31 @@ This is the value used downstream as `OVERALL_CONFIDENCE` in Stage 5c's user-dec
 
 If `failing_topics` is non-empty AND `replan_count < 2`, run an auto-replan cycle:
 
-1. For each failing topic, construct a replan hint:
+1. For each failing topic, decide its hint:
    - If the topic has a stored `replan_hint` from a hop-planner `decision: "replan"`: use it directly.
-   - Otherwise: synthesize a hint pointing at the gap (e.g., `{"issue": "thin sources", "suggested_pattern": "entity_expansion", "suggested_query_focus": "official agency data"}`). Persist via `set_replan_hint(topic, synthesized_hint)`.
-2. **Re-admit each failing topic into the hop loop.** A topic that exhausted its initial budget has `current_hop == max_hops`, so Stage 4's admission filter (`current_hop < max_hops`) would otherwise skip it. To enable another hop without rewinding completed work, call `bump_max_hops(topic, increment=1)`. This gives the topic exactly one additional hop slot.
-3. Call `mark_topic_status(topic, "active")` to re-admit.
-4. Call `increment_replan(STATE_DIR)`.
-5. **Roll the stage marker back to `hop_loop`** via `update_stage(state_dir, "hop_loop")`. Without this, the run's `stage` field stays at `quality_gate` -- a crash after re-admission would resume into the gate and re-run it instead of running another hop.
-6. Return to Stage 4 (the hop loop runs one more pass; only re-admitted topics dispatch search/fetch/summarize/hop-planner). Stage 4a's search-agent reads `topic.replan_hint` to bias the next query toward the suggested pattern/focus.
+   - Otherwise: synthesize a hint pointing at the gap (e.g., `{"issue": "thin sources", "suggested_pattern": "entity_expansion", "suggested_query_focus": "official agency data"}`).
+2. **Re-admit each failing topic into the hop loop.** A topic that exhausted its initial budget has `current_hop == max_hops`, so Stage 4's admission filter (`current_hop < max_hops`) would otherwise skip it. The re-admission needs to set the hint, bump `max_hops` by 1, mark status `active`, increment `replan_count`, and roll the stage marker back to `hop_loop` -- **all in a single atomic state transition**. Use `apply_replan_readmit()`: a crash partway through must not leave the run with topics flagged active but stage stuck at `quality_gate`.
+3. Return to Stage 4 (the hop loop runs one more pass; only re-admitted topics dispatch search/fetch/summarize/hop-planner). Stage 4a's search-agent reads `topic.replan_hint` to bias the next query toward the suggested pattern/focus.
 
 ```bash
 python -c "
 import sys
 sys.path.insert(0, 'SCRIPTS')
-from state import load_run, set_replan_hint, bump_max_hops, mark_topic_status, increment_replan, update_stage
+from state import apply_replan_readmit
 from pathlib import Path
 state_dir = Path('STATE_DIR')
-run = load_run(state_dir)
-for t in FAILING_TOPICS:
-    if t['replan_hint'] is None:
-        set_replan_hint(state_dir, t['topic'], SYNTHESIZED_HINT)
-    bump_max_hops(state_dir, t['topic'], increment=1)
-    mark_topic_status(state_dir, t['topic'], 'active')
-increment_replan(state_dir)
-update_stage(state_dir, 'hop_loop')
+# For each failing topic, pass either its existing replan_hint or a freshly
+# synthesized one. Pass None to preserve any existing hint without overwriting.
+specs = [
+    {'topic_name': t['topic'],
+     'replan_hint': SYNTHESIZED_HINT_OR_t['replan_hint']}
+    for t in FAILING_TOPICS
+]
+apply_replan_readmit(state_dir, specs)
 "
 ```
+
+`apply_replan_readmit` does the full transition (set replan_hint, bump max_hops, mark active, increment replan_count, set stage='hop_loop') in one load->mutate->save cycle. Do not call the per-field setters here -- they're not crash-safe across multiple writes.
 
 ### 5c. User prompt (auto-replan exhausted)
 
@@ -661,31 +660,25 @@ record_user_decision(Path('STATE_DIR'), decision='DECISION_VALUE', confidence=OV
 
 Branch by decision:
 
-- **`replan`** (only valid when `replan_count == 2`): apply the same re-admission recipe as Stage 5b (so the topic actually makes it back into the hop loop):
-  - For each failing topic, if `replan_hint` is None, synthesize one (the user may also supply a manual hint via free-text input -- capture it as the `issue` field).
-  - Call `bump_max_hops(topic, increment=1)` so `current_hop < max_hops` again.
-  - Call `mark_topic_status(topic, "active")`.
-  - Call `increment_replan(STATE_DIR)` once more (reaching 3).
-  - Call `update_stage(state_dir, "hop_loop")` so resume targets the hop loop, not the gate.
+- **`replan`** (only valid when `replan_count == 2`): apply the same re-admission recipe as Stage 5b via the atomic helper (`apply_replan_readmit`). For each failing topic, if its `replan_hint` is None, synthesize one (the user may also supply a manual hint via free-text input -- capture it as the `issue` field). Then dispatch the helper once with all specs:
 
   ```bash
   python -c "
   import sys
   sys.path.insert(0, 'SCRIPTS')
-  from state import set_replan_hint, bump_max_hops, mark_topic_status, increment_replan, update_stage
+  from state import apply_replan_readmit
   from pathlib import Path
   state_dir = Path('STATE_DIR')
-  for t in FAILING_TOPICS:
-      if t['replan_hint'] is None:
-          set_replan_hint(state_dir, t['topic'], SYNTHESIZED_HINT)
-      bump_max_hops(state_dir, t['topic'], increment=1)
-      mark_topic_status(state_dir, t['topic'], 'active')
-  increment_replan(state_dir)
-  update_stage(state_dir, 'hop_loop')
+  specs = [
+      {'topic_name': t['topic'],
+       'replan_hint': SYNTHESIZED_HINT_OR_t['replan_hint']}
+      for t in FAILING_TOPICS
+  ]
+  apply_replan_readmit(state_dir, specs)
   "
   ```
 
-  Return to Stage 4. After this attempt, no more replans -- if it fails again, re-enter Stage 5c with `replan_count == 3` and present only continue / abandon.
+  This bumps `replan_count` to 3 in the same atomic save that re-admits the topics and rolls `stage` back to `hop_loop`. Return to Stage 4. After this attempt, no more replans -- if it fails again, re-enter Stage 5c with `replan_count == 3` and present only continue / abandon.
 - **`continue`**: mark the run with `low_confidence = true` (see 5d). Proceed to Stage 6. The write stage adds body callouts to all written notes.
 - **`abandon`**: set `abandoned_at_gate: true` in the run dict, save, then call `abandon_run(STATE_DIR)` (which already exists in state.py and archives via `_archive_run`). Print the archived path so the user can inspect:
 

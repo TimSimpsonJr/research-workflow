@@ -346,6 +346,119 @@ def test_apply_hop_decision_unknown_raises(tmp_path):
                            confidence_score=0.0, contradiction_rate=0.0)
 
 
+def test_apply_replan_readmit_is_atomic(tmp_path):
+    """apply_replan_readmit re-admits failing topics, bumps max_hops, sets
+    replan_hints, increments replan_count, and sets stage='hop_loop' in one
+    load->mutate->save cycle so a crash mid-readmission cannot leave topics
+    flagged active with stage stuck at 'quality_gate'."""
+    from state import (
+        create_run, init_topic, save_state, update_stage,
+        apply_replan_readmit, load_run,
+    )
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    # Two topics that already failed at the gate
+    t1 = init_topic("alpha", mode="web_research", depth="standard")
+    t1["status"] = "complete"
+    t1["max_hops"] = 3
+    t1["current_hop"] = 3
+    t1["replan_hint"] = {"issue": "prior", "suggested_pattern": "entity_expansion"}
+    t2 = init_topic("beta", mode="web_research", depth="standard")
+    t2["status"] = "replan_pending"
+    t2["max_hops"] = 3
+    t2["current_hop"] = 3
+    run["topics"] = [t1, t2]
+    save_state(tmp_path, run)
+    # The orchestrator advanced to the quality gate
+    update_stage(tmp_path, "quality_gate")
+
+    synth_hint = {"issue": "thin sources", "suggested_pattern": "source_widening"}
+    apply_replan_readmit(
+        tmp_path,
+        failing_topic_specs=[
+            # alpha keeps its prior hint (None means "don't overwrite")
+            {"topic_name": "alpha", "replan_hint": None},
+            # beta gets a freshly synthesized hint
+            {"topic_name": "beta",  "replan_hint": synth_hint},
+        ],
+    )
+
+    reloaded = load_run(tmp_path)
+    by_name = {t["topic"]: t for t in reloaded["topics"]}
+
+    # Both topics re-admitted to the hop loop
+    assert by_name["alpha"]["status"] == "active"
+    assert by_name["beta"]["status"] == "active"
+    # Hop budget bumped by 1
+    assert by_name["alpha"]["max_hops"] == 4
+    assert by_name["beta"]["max_hops"] == 4
+    # Existing hint preserved when spec hint is None; new hint set otherwise
+    assert by_name["alpha"]["replan_hint"] == {"issue": "prior", "suggested_pattern": "entity_expansion"}
+    assert by_name["beta"]["replan_hint"] == synth_hint
+    # Replan counter incremented and stage rolled back to hop_loop in the same save
+    assert reloaded["replan_count"] == 1
+    assert reloaded["stage"] == "hop_loop"
+
+
+def test_apply_replan_readmit_skip_increment(tmp_path):
+    """increment_replan_counter=False leaves replan_count untouched (used when
+    the counter was already bumped earlier in the flow)."""
+    from state import (
+        create_run, init_topic, save_state, apply_replan_readmit, load_run,
+    )
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    t = init_topic("alpha", mode="web_research", depth="standard")
+    t["status"] = "complete"
+    t["current_hop"] = 3
+    run["topics"] = [t]
+    run["replan_count"] = 2
+    save_state(tmp_path, run)
+
+    apply_replan_readmit(
+        tmp_path,
+        failing_topic_specs=[{"topic_name": "alpha", "replan_hint": None}],
+        increment_replan_counter=False,
+    )
+    reloaded = load_run(tmp_path)
+    assert reloaded["replan_count"] == 2  # unchanged
+    assert reloaded["stage"] == "hop_loop"
+    assert reloaded["topics"][0]["status"] == "active"
+
+
+def test_apply_replan_readmit_unknown_topic_raises_no_partial_disk_state(tmp_path):
+    """An unknown topic_name in the middle of the spec list aborts the whole
+    transition before save_state runs. On disk the prior valid mutation must
+    NOT be visible — that's the whole point of the one-save-at-end design."""
+    import pytest
+    from state import (
+        create_run, init_topic, save_state, apply_replan_readmit, load_run,
+    )
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    t = init_topic("alpha", mode="web_research", depth="standard")
+    t["status"] = "complete"
+    t["current_hop"] = 3
+    run["topics"] = [t]
+    save_state(tmp_path, run)
+
+    with pytest.raises(KeyError, match="Topic not found"):
+        apply_replan_readmit(
+            tmp_path,
+            failing_topic_specs=[
+                # Valid spec first — would mutate in-memory if save reached.
+                {"topic_name": "alpha", "replan_hint": {"issue": "x"}},
+                # Then a bogus one that raises mid-loop.
+                {"topic_name": "ghost", "replan_hint": None},
+            ],
+        )
+
+    # On disk: state unchanged — the in-memory mutation never reached save_state.
+    reloaded = load_run(tmp_path)
+    assert reloaded["replan_count"] == 0
+    assert reloaded["stage"] == "triage"
+    assert reloaded["topics"][0]["status"] == "complete"  # not re-admitted
+    assert reloaded["topics"][0]["max_hops"] == 3         # not bumped
+    assert reloaded["topics"][0]["replan_hint"] is None   # not overwritten
+
+
 def test_add_usage_starts_at_zero(tmp_path):
     from state import create_run
     run = create_run(tmp_path, run_id="r1", tier="full")
