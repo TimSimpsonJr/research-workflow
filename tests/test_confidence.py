@@ -53,6 +53,19 @@ def test_tier_diversity_empty():
     assert tier_diversity_weight([]) == 0.0
 
 
+def test_tier_diversity_missing_tier_treated_as_t4():
+    """Defense against malformed agent output: a source dict without 'tier' is T4."""
+    sources = [{"tier": "T1"}, {"url": "no-tier-key"}]
+    expected = (1.0 + 0.25) / 2
+    assert tier_diversity_weight(sources) == expected
+
+
+def test_tier_diversity_unknown_tier_treated_as_t4():
+    sources = [{"tier": "T1"}, {"tier": "T9"}]   # T9 is bogus
+    expected = (1.0 + 0.25) / 2
+    assert tier_diversity_weight(sources) == expected
+
+
 def test_topic_coverage_three_t2_sources():
     sources = [{"tier": "T2"}, {"tier": "T2"}, {"tier": "T2"}]
     assert topic_coverage(sources) == 1.0
@@ -66,6 +79,12 @@ def test_topic_coverage_two_t1_sources():
 def test_topic_coverage_low_tier_excluded():
     sources = [{"tier": "T3"}, {"tier": "T4"}, {"tier": "T3"}]
     assert topic_coverage(sources) == 0.0
+
+
+def test_topic_coverage_missing_tier_treated_as_below_t2():
+    """A source dict without 'tier' is not counted toward T2+ coverage."""
+    sources = [{"tier": "T1"}, {"url": "no-tier"}, {"tier": "T2"}]
+    assert topic_coverage(sources) == 2 / 3
 
 
 def test_topic_coverage_mixed():

@@ -22,15 +22,23 @@ TIER_WEIGHTS = {"T1": 1.0, "T2": 0.75, "T3": 0.5, "T4": 0.25}
 
 
 def tier_diversity_weight(sources: list[dict]) -> float:
-    """Average tier weight across sources. Empty list returns 0.0."""
+    """Average tier weight across sources. Empty list returns 0.0.
+
+    Defensive against missing/unknown tier values: source dicts without a
+    tier key are treated as T4 (worst), as are sources with unrecognized
+    tier strings. This guards against malformed agent output.
+    """
     if not sources:
         return 0.0
-    return sum(TIER_WEIGHTS.get(s["tier"], 0.25) for s in sources) / len(sources)
+    return sum(TIER_WEIGHTS.get(s.get("tier", "T4"), 0.25) for s in sources) / len(sources)
 
 
 def topic_coverage(sources: list[dict]) -> float:
-    """Fraction of T2+ sources up to a count of 3. Caps at 1.0."""
-    t2plus = sum(1 for s in sources if s["tier"] in {"T1", "T2"})
+    """Fraction of T2+ sources up to a count of 3. Caps at 1.0.
+
+    Sources missing a tier key are treated as below T2 (excluded from the count).
+    """
+    t2plus = sum(1 for s in sources if s.get("tier") in {"T1", "T2"})
     return min(1.0, t2plus / 3)
 
 
