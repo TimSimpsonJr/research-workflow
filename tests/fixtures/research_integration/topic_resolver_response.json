@@ -1,0 +1,25 @@
+{
+  "project": "Test research",
+  "strategy": "planning_only",
+  "shared_context_files": [],
+  "topics": [
+    {
+      "topic": "Test topic about Flock Safety",
+      "mode": "web_research",
+      "depth": "quick",
+      "existing_urls": [],
+      "related_vault_notes": []
+    }
+  ],
+  "local_sources": [],
+  "thread_pulls": [],
+  "execution_order": "parallel",
+  "estimated_usage": {
+    "search_agents": 1,
+    "summarize_calls": 5,
+    "classify_agents": 1,
+    "write_messages": "1 Sonnet",
+    "local_extractions": 0,
+    "total_claude_messages": "~5"
+  }
+}

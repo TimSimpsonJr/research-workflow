@@ -1,0 +1,35 @@
+{
+  "fetched": [
+    {
+      "url": "https://www.eff.org/deeplinks/flock-safety-alpr-report",
+      "title": "EFF: Flock Safety ALPR Surveillance Report",
+      "content": "Flock Safety operates one of the largest privately-owned ALPR networks in the United States, with cameras deployed in over 4,000 communities. This report examines retention policies, data-sharing agreements with law enforcement, and the civil liberties implications of widespread automated surveillance...",
+      "method": "jina",
+      "fetch_method": "jina",
+      "cache_hit": false,
+      "fetched_at": "2026-05-26T15:00:00Z",
+      "word_count": 42
+    },
+    {
+      "url": "https://flocksafety.com/transparency",
+      "title": "Flock Safety -- Transparency Report",
+      "content": "Flock Safety publishes this transparency report to disclose the scope of our partnerships with law enforcement agencies, our default 30-day data retention window, and the categories of footage we make available through our platform...",
+      "method": "jina",
+      "fetch_method": "jina",
+      "cache_hit": false,
+      "fetched_at": "2026-05-26T15:00:01Z",
+      "word_count": 36
+    },
+    {
+      "url": "https://www.brookings.edu/articles/alpr-policy-tradeoffs",
+      "title": "Brookings: Policy Tradeoffs of License Plate Readers",
+      "content": "Automated license plate reader deployment varies widely across U.S. jurisdictions. This article reviews retention requirements, oversight mechanisms, and the tradeoffs between investigative utility and bulk-surveillance risk...",
+      "method": "jina",
+      "fetch_method": "jina",
+      "cache_hit": false,
+      "fetched_at": "2026-05-26T15:00:02Z",
+      "word_count": 34
+    }
+  ],
+  "failed": []
+}

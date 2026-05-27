@@ -1,0 +1,41 @@
+{
+  "topic": "Test topic about Flock Safety",
+  "items": [
+    {
+      "url": "https://www.eff.org/deeplinks/flock-safety-alpr-report",
+      "title": "EFF: Flock Safety ALPR Surveillance Report",
+      "summary": "EFF's investigation finds Flock Safety operates ALPRs in 4,000+ communities with broad data-sharing agreements. Civil liberties concerns center on retention duration, opaque sharing protocols, and the absence of judicial oversight for queries.",
+      "source_type": "investigative_journalism",
+      "key_entities": ["Flock Safety", "EFF", "ALPR networks"],
+      "key_claims": [
+        "Flock Safety operates in over 4,000 communities.",
+        "Default data-sharing agreements include local and federal partners.",
+        "EFF cites the lack of judicial oversight as a primary civil liberties concern."
+      ]
+    },
+    {
+      "url": "https://flocksafety.com/transparency",
+      "title": "Flock Safety -- Transparency Report",
+      "summary": "Flock Safety's official transparency report describes a default 30-day data retention window and partnerships with law enforcement agencies. The report frames the program as opt-in for participating jurisdictions.",
+      "source_type": "company_disclosure",
+      "key_entities": ["Flock Safety", "law enforcement partnerships"],
+      "key_claims": [
+        "Default data retention is 30 days.",
+        "Jurisdictions opt in to law enforcement data sharing.",
+        "Transparency reporting is published on a recurring cadence."
+      ]
+    },
+    {
+      "url": "https://www.brookings.edu/articles/alpr-policy-tradeoffs",
+      "title": "Brookings: Policy Tradeoffs of License Plate Readers",
+      "summary": "Brookings reviews ALPR policy across jurisdictions and identifies a tradeoff between investigative utility and bulk-surveillance risk. Stricter retention windows correlate with lower civil liberties friction but reduce cold-case clearance.",
+      "source_type": "policy_analysis",
+      "key_entities": ["ALPR programs", "policy frameworks"],
+      "key_claims": [
+        "Retention duration is the dominant policy variable.",
+        "Shorter retention reduces civil liberties friction.",
+        "Investigative utility declines as retention shrinks."
+      ]
+    }
+  ]
+}
