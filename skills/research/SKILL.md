@@ -562,6 +562,8 @@ vault_index_path: {VAULT}/.research-workflow/vault_index.db
 scripts_dir: SCRIPTS
 ```
 
+**Learned-pattern injection (v3.1.0):** same shape as Stage 4a's learned-pattern injection, but for the hop-planner stage. If `LEARNED_BY_STAGE["hop_planner"]` is non-empty, load each pattern's full record via `load_learned_patterns` (filter by the IDs in `LEARNED_BY_STAGE["hop_planner"]`), append a `## Learned Patterns` block to the hop-planner's dispatch prompt under the existing context, then call `record_applied_pattern(STATE_DIR, pattern_id)` once per surfaced pattern. See Stage 4a for the exact Bash snippets to reuse.
+
 Parse each hop-planner response. **Apply the full transition atomically via `apply_hop_decision()`** -- never via the per-field setters in this stage. The atomic helper persists genealogy + current_hop + confidence_history + contradiction_rate + next_hop / replan_hint / status in a single load -> mutate -> save cycle, so a crash partway through the transition cannot leave a topic with mismatched state (hop recorded but quality signals stale, status updated but routing stale, etc.).
 
 ```bash
@@ -834,6 +836,8 @@ Dispatch via the Task tool:
   "shared_context_files": {from the research plan}
 }
 ```
+
+**Learned-pattern injection (v3.1.0):** same shape as Stage 4a's learned-pattern injection, but for the classify stage. If `LEARNED_BY_STAGE["classify"]` is non-empty, load each pattern's full record via `load_learned_patterns` (filter by the IDs in `LEARNED_BY_STAGE["classify"]`), append a `## Learned Patterns` block to the classify-agent's dispatch prompt under the existing JSON context, then call `record_applied_pattern(STATE_DIR, pattern_id)` once per surfaced pattern. See Stage 4a for the exact Bash snippets to reuse.
 
 ### 6c. Parse classification
 
