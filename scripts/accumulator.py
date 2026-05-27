@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field, asdict
+from datetime import datetime, timezone
 from pathlib import Path
 
 from state import write_shared_state_atomically
@@ -107,3 +108,56 @@ def save_accumulator(path: Path, acc: Accumulator) -> None:
         "entries": [asdict(e) for e in acc.entries],
     }
     write_shared_state_atomically(path, payload)
+
+
+def record_observation(
+    acc: Accumulator,
+    *,
+    pattern_id: str,
+    name: str,
+    category: str,
+    target_stage: str,
+    domain_tags: list[str],
+    evidence_row: dict,
+    proposed_promotion_body: str,
+) -> AccumulatorEntry:
+    """Record one observation. If the pattern_id exists, increment sessions_seen
+    and append evidence. If new, add a fresh entry with sessions_seen=1, status=hold.
+    Returns the entry (existing or new)."""
+    now = datetime.now(timezone.utc).isoformat()
+    for entry in acc.entries:
+        if entry.pattern_id == pattern_id:
+            if entry.status == "rejected":
+                return entry  # never re-touch rejected entries
+            entry.sessions_seen += 1
+            entry.sessions_since_last_seen = 0
+            entry.evidence.append(evidence_row)
+            entry.last_updated_at = now
+            return entry
+    new_entry = AccumulatorEntry(
+        pattern_id=pattern_id,
+        name=name,
+        category=category,
+        target_stage=target_stage,
+        domain_tags=list(domain_tags),
+        sessions_seen=1,
+        sessions_since_last_seen=0,
+        status="hold",
+        raised_bar=False,
+        promotion_pending=False,
+        demotion_count=0,
+        evidence=[evidence_row],
+        proposed_promotion_body=proposed_promotion_body,
+        created_at=now,
+        last_updated_at=now,
+    )
+    acc.entries.append(new_entry)
+    return new_entry
+
+
+def tick_staleness(acc: Accumulator, seen_pattern_ids: set[str]) -> None:
+    """Increment sessions_since_last_seen for entries not in seen_pattern_ids.
+    Called once per analyzer run after all observations are recorded."""
+    for entry in acc.entries:
+        if entry.pattern_id not in seen_pattern_ids and entry.status == "hold":
+            entry.sessions_since_last_seen += 1

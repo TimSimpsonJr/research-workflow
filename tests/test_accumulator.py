@@ -91,3 +91,67 @@ def test_load_invalid_utf8_returns_empty_with_warning(tmp_path):
     assert acc.entries == []
     assert len(warnings) == 1
     assert "accumulator_corrupted" in warnings[0]
+
+
+def test_record_observation_new_pattern():
+    """A pattern_id not in the accumulator gets added with sessions_seen=1."""
+    from accumulator import Accumulator, record_observation
+    acc = Accumulator()
+    record_observation(
+        acc,
+        pattern_id="p1",
+        name="P1",
+        category="cat",
+        target_stage="search",
+        domain_tags=["civic"],
+        evidence_row={"case_id": "c1", "signal": "..."},
+        proposed_promotion_body="body",
+    )
+    assert len(acc.entries) == 1
+    e = acc.entries[0]
+    assert e.sessions_seen == 1
+    assert e.sessions_since_last_seen == 0
+    assert e.status == "hold"
+
+
+def test_record_observation_existing_increments_seen():
+    """Recording the same pattern again increments sessions_seen and resets stale."""
+    from accumulator import Accumulator, AccumulatorEntry, record_observation
+    acc = Accumulator(entries=[AccumulatorEntry(
+        pattern_id="p1", name="P1", category="cat", target_stage="search",
+        domain_tags=["civic"], sessions_seen=2, sessions_since_last_seen=3,
+        status="hold", raised_bar=False, promotion_pending=False, demotion_count=0,
+        evidence=[{"case_id": "c0", "signal": "..."}],
+        proposed_promotion_body="body",
+        created_at="2026-05-20T00:00:00Z",
+        last_updated_at="2026-05-22T00:00:00Z",
+    )])
+    record_observation(
+        acc, pattern_id="p1", name="P1", category="cat", target_stage="search",
+        domain_tags=["civic"],
+        evidence_row={"case_id": "c1", "signal": "new"},
+        proposed_promotion_body="body",
+    )
+    assert acc.entries[0].sessions_seen == 3
+    assert acc.entries[0].sessions_since_last_seen == 0
+    assert len(acc.entries[0].evidence) == 2
+
+
+def test_tick_staleness_increments_unobserved():
+    """tick_staleness increments sessions_since_last_seen for entries not in the
+    seen_set, leaves others alone."""
+    from accumulator import Accumulator, AccumulatorEntry, tick_staleness
+    e1 = AccumulatorEntry(pattern_id="p1", name="", category="", target_stage="",
+                          domain_tags=[], sessions_seen=1, sessions_since_last_seen=0,
+                          status="hold", raised_bar=False, promotion_pending=False,
+                          demotion_count=0, evidence=[], proposed_promotion_body="",
+                          created_at="", last_updated_at="")
+    e2 = AccumulatorEntry(pattern_id="p2", name="", category="", target_stage="",
+                          domain_tags=[], sessions_seen=1, sessions_since_last_seen=2,
+                          status="hold", raised_bar=False, promotion_pending=False,
+                          demotion_count=0, evidence=[], proposed_promotion_body="",
+                          created_at="", last_updated_at="")
+    acc = Accumulator(entries=[e1, e2])
+    tick_staleness(acc, seen_pattern_ids={"p1"})
+    assert acc.entries[0].sessions_since_last_seen == 0  # p1 observed
+    assert acc.entries[1].sessions_since_last_seen == 3  # p2 not observed
