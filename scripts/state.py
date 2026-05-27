@@ -45,6 +45,159 @@ def record_hop(state_dir: Path, topic_name: str, hop_data: dict) -> None:
     save_state(state_dir, run)
 
 
+def mark_topic_status(state_dir: Path, topic_name: str, status: str) -> None:
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["status"] = status
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def append_confidence(state_dir: Path, topic_name: str, score: float) -> None:
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["confidence_history"].append(score)
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def set_contradiction_rate(state_dir: Path, topic_name: str, rate: float) -> None:
+    """Overwrite the topic's contradiction_rate with the latest measurement.
+
+    Setter rather than history-tracker — the rate is recomputed from all hops'
+    summaries each pass, so only the latest value is meaningful.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["contradiction_rate"] = rate
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def set_replan_hint(state_dir: Path, topic_name: str, hint: dict | None) -> None:
+    """Set or clear the topic's replan_hint (read by Stage 5b auto-replan)."""
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["replan_hint"] = hint
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def set_next_hop(state_dir: Path, topic_name: str, next_hop: dict | None) -> None:
+    """Set or clear the topic's next_hop (read by Stage 4a on the next iteration).
+
+    Called after a hop-planner decision="continue" to record the pattern/from/rationale
+    that should drive the next search. Cleared after consumption in Stage 4a.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["next_hop"] = next_hop
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def bump_max_hops(state_dir: Path, topic_name: str, increment: int = 1) -> None:
+    """Increase the topic's hop budget.
+
+    Used by Stage 5b auto-replan to give a topic another hop after it exhausts
+    its initial budget; without this, the Stage 4 admission check
+    (current_hop < max_hops) would silently filter the topic out.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["max_hops"] += increment
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def apply_hop_decision(
+    state_dir: Path,
+    topic_name: str,
+    hop_data: dict,
+    decision: str,
+    confidence_score: float,
+    contradiction_rate: float,
+    next_hop: dict | None = None,
+    replan_hint: dict | None = None,
+) -> None:
+    """Atomically apply the full state transition for one hop-planner decision.
+
+    Combines record_hop + set_next_hop + set_replan_hint + mark_topic_status
+    + append_confidence + set_contradiction_rate into a single
+    load -> mutate -> save cycle so a crash mid-transition cannot leave the
+    topic with partial state — e.g., hop recorded but quality signals stale,
+    or status updated but next_hop relative to the just-completed hop.
+
+    `decision` is one of: "continue", "stop", "early_terminated", "replan".
+
+    Stage 4e of the orchestrator should always call this rather than the
+    per-field setters when applying a hop-planner response. The quality
+    signals (confidence_score, contradiction_rate) come directly from the
+    hop-planner JSON and are required arguments.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            # Always: record the hop, advance current_hop, persist quality signals
+            t["hop_genealogy"].append(hop_data)
+            t["current_hop"] += 1
+            t["confidence_history"].append(confidence_score)
+            t["contradiction_rate"] = contradiction_rate
+            # Decision-specific transitions
+            if decision == "continue":
+                t["next_hop"] = next_hop
+                t["replan_hint"] = None   # clear any stale replan_hint
+                # status stays "active"
+            elif decision == "stop":
+                t["next_hop"] = None
+                t["status"] = "complete"
+            elif decision == "early_terminated":
+                t["next_hop"] = None
+                t["status"] = "early_terminated"
+            elif decision == "replan":
+                t["next_hop"] = None
+                t["replan_hint"] = replan_hint
+                t["status"] = "replan_pending"
+            else:
+                raise ValueError(f"Unknown decision: {decision!r}")
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
 def init_topic(topic: str, mode: str, depth: str) -> dict:
     """Create a fresh topic state entry for the run.
 

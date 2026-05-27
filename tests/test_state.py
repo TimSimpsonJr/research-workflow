@@ -182,3 +182,141 @@ def test_record_hop_appends_to_genealogy(tmp_path):
     reloaded = load_run(tmp_path)
     assert reloaded["topics"][0]["hop_genealogy"] == [hop_data]
     assert reloaded["topics"][0]["current_hop"] == 1
+
+
+def test_mark_topic_status(tmp_path):
+    from state import create_run, init_topic, mark_topic_status, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    mark_topic_status(tmp_path, topic_name="X", status="complete")
+    assert load_run(tmp_path)["topics"][0]["status"] == "complete"
+
+
+def test_append_confidence(tmp_path):
+    from state import create_run, init_topic, append_confidence, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    append_confidence(tmp_path, topic_name="X", score=0.42)
+    append_confidence(tmp_path, topic_name="X", score=0.71)
+    assert load_run(tmp_path)["topics"][0]["confidence_history"] == [0.42, 0.71]
+
+
+def test_set_contradiction_rate(tmp_path):
+    from state import create_run, init_topic, set_contradiction_rate, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    set_contradiction_rate(tmp_path, topic_name="X", rate=0.18)
+    assert load_run(tmp_path)["topics"][0]["contradiction_rate"] == 0.18
+
+    # Overwrites with newer value
+    set_contradiction_rate(tmp_path, topic_name="X", rate=0.32)
+    assert load_run(tmp_path)["topics"][0]["contradiction_rate"] == 0.32
+
+
+def test_set_replan_hint(tmp_path):
+    from state import create_run, init_topic, set_replan_hint, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    hint = {"issue": "thin sources", "suggested_pattern": "entity_expansion",
+            "suggested_query_focus": "official agency data"}
+    set_replan_hint(tmp_path, topic_name="X", hint=hint)
+    assert load_run(tmp_path)["topics"][0]["replan_hint"] == hint
+
+
+def test_bump_max_hops(tmp_path):
+    """Bumping max_hops lets a topic re-enter the hop loop after exhausting its budget."""
+    from state import create_run, init_topic, bump_max_hops, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]  # max_hops=3
+    save_state(tmp_path, run)
+
+    bump_max_hops(tmp_path, topic_name="X", increment=1)
+    assert load_run(tmp_path)["topics"][0]["max_hops"] == 4
+
+
+def test_apply_hop_decision_continue_is_atomic(tmp_path):
+    """apply_hop_decision applies hop record + routing + quality signals + status in one save."""
+    from state import create_run, init_topic, save_state, apply_hop_decision, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    topic = init_topic("X", mode="web_research", depth="standard")
+    topic["replan_hint"] = {"issue": "stale"}  # simulate a prior replan
+    run["topics"] = [topic]
+    save_state(tmp_path, run)
+
+    hop_data = {"hop": 1, "pattern": None, "queries": [], "sources_kept": 5,
+                "ended_at": "2026-05-26T15:00:00Z"}
+    next_hop = {"pattern": "entity_expansion", "from": "Flock Safety", "rationale": "..."}
+    apply_hop_decision(tmp_path, topic_name="X", hop_data=hop_data,
+                       decision="continue", confidence_score=0.68,
+                       contradiction_rate=0.12, next_hop=next_hop)
+
+    t = load_run(tmp_path)["topics"][0]
+    assert t["hop_genealogy"] == [hop_data]
+    assert t["current_hop"] == 1
+    assert t["confidence_history"] == [0.68]
+    assert t["contradiction_rate"] == 0.12
+    assert t["next_hop"] == next_hop
+    assert t["replan_hint"] is None  # cleared atomically
+    assert t["status"] == "active"
+
+
+def test_apply_hop_decision_stop_marks_complete(tmp_path):
+    from state import create_run, init_topic, save_state, apply_hop_decision, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    apply_hop_decision(tmp_path, topic_name="X",
+                       hop_data={"hop": 1, "ended_at": "..."},
+                       decision="stop", confidence_score=0.82,
+                       contradiction_rate=0.05)
+
+    t = load_run(tmp_path)["topics"][0]
+    assert t["current_hop"] == 1
+    assert t["confidence_history"] == [0.82]
+    assert t["contradiction_rate"] == 0.05
+    assert t["next_hop"] is None
+    assert t["status"] == "complete"
+
+
+def test_apply_hop_decision_replan_stores_hint(tmp_path):
+    from state import create_run, init_topic, save_state, apply_hop_decision, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    hint = {"issue": "thin sources", "suggested_pattern": "entity_expansion",
+            "suggested_query_focus": "official data"}
+    apply_hop_decision(tmp_path, topic_name="X",
+                       hop_data={"hop": 1, "ended_at": "..."},
+                       decision="replan", confidence_score=0.41,
+                       contradiction_rate=0.38, replan_hint=hint)
+
+    t = load_run(tmp_path)["topics"][0]
+    assert t["current_hop"] == 1
+    assert t["confidence_history"] == [0.41]
+    assert t["contradiction_rate"] == 0.38
+    assert t["next_hop"] is None
+    assert t["replan_hint"] == hint
+    assert t["status"] == "replan_pending"
+
+
+def test_apply_hop_decision_unknown_raises(tmp_path):
+    from state import create_run, init_topic, save_state, apply_hop_decision
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    with pytest.raises(ValueError, match="Unknown decision"):
+        apply_hop_decision(tmp_path, topic_name="X",
+                           hop_data={"hop": 1},
+                           decision="bogus",
+                           confidence_score=0.0, contradiction_rate=0.0)
