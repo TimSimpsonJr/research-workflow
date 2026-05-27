@@ -807,7 +807,7 @@ This is the core stage. **You (the Sonnet orchestrator) write the notes.** For s
 
 ### 7a. Aggregate per-hop fetch results
 
-Stage 4 produces one `fetch_results_hop{N}.json` per hop. Before writing notes, merge them into a single url -> content lookup so 7c.iii (full-source-content recovery) doesn't have to re-glob and re-parse per note:
+Stage 4 produces one `fetch_results_hop{N}.json` per hop. Before writing notes, merge them into a single url -> content lookup so 7c.iii (full-source-content recovery) doesn't have to re-glob and re-parse per note. **Write atomically via temp+rename** so a crash mid-write cannot leave a corrupt JSON file on disk — the Resume Flow only rebuilds when the file is missing or unparseable, not when it merely looks "present":
 
 ```bash
 python -c "
@@ -821,7 +821,10 @@ for hf in sorted(state_dir.glob('fetch_results_hop*.json')):
         # later hops win on URL collisions (same URL re-fetched gets the freshest content)
         url_to_entry[entry['url']] = entry
 combined = {'fetched': list(url_to_entry.values()), 'by_url': url_to_entry}
-(state_dir / 'fetch_results_aggregated.json').write_text(json.dumps(combined, indent=2))
+target = state_dir / 'fetch_results_aggregated.json'
+tmp = target.with_suffix('.tmp')
+tmp.write_text(json.dumps(combined, indent=2), encoding='utf-8')
+tmp.replace(target)
 "
 ```
 
@@ -1294,7 +1297,7 @@ When resuming a run (Stage 1 detected an active run and the user chose "Resume")
    - `search_context_hop{N}.json` and `fetch_results_hop{N}.json` (per-hop, from Stage 4)
    - `summaries_hop{N}.json` (per-hop, from Stage 4d) and aggregated `summaries.json` (from Stage 6a)
    - `classification.json` (from Stage 6d)
-   - `fetch_results_aggregated.json` (from Stage 7a -- regenerate if missing on resume into the write stage)
+   - `fetch_results_aggregated.json` (from Stage 7a -- regenerate if missing OR if loading it raises `JSONDecodeError` on resume into the write stage)
    - `written_notes.json` (from Stage 7)
-3. Skip to the recorded stage. For the `hop_loop` stage, the topics' `current_hop` and `status` fields determine which active topics still need processing -- only un-completed topics dispatch through Stage 4 again. For the `write` stage specifically, check `written_notes.json` to determine which notes are already complete and skip them. If `fetch_results_aggregated.json` is missing when resuming into write, re-run the Stage 7a aggregation snippet (it's a pure function of the existing per-hop files).
+3. Skip to the recorded stage. For the `hop_loop` stage, the topics' `current_hop` and `status` fields determine which active topics still need processing -- only un-completed topics dispatch through Stage 4 again. For the `write` stage specifically, check `written_notes.json` to determine which notes are already complete and skip them. If `fetch_results_aggregated.json` is missing OR `json.loads()` on its contents raises `JSONDecodeError` (the prior run crashed mid-write before the temp+rename completed), re-run the Stage 7a aggregation snippet -- it's a pure function of the existing per-hop files, so regeneration is safe.
 4. Continue the pipeline from that point.
