@@ -7,6 +7,7 @@ from confidence import (
     primary_source_presence,
     source_count_adequacy,
     tier_diversity_weight,
+    tier_from_score,
     topic_coverage,
 )
 
@@ -156,3 +157,27 @@ def test_contradiction_rate_too_few_sources():
     sources = [{"url": "a"}]
     contradictions = []
     assert contradiction_rate(sources, contradictions) == 0.0
+
+
+def test_tier_from_score_t1():
+    assert tier_from_score(0.95) == "T1"
+    assert tier_from_score(0.9) == "T1"
+
+
+def test_tier_from_score_t2():
+    assert tier_from_score(0.85) == "T2"
+    assert tier_from_score(0.7) == "T2"
+
+
+def test_tier_from_score_t3():
+    assert tier_from_score(0.6) == "T3"
+    assert tier_from_score(0.5) == "T3"
+
+
+def test_tier_from_score_t4():
+    assert tier_from_score(0.4) == "T4"
+    assert tier_from_score(0.3) == "T4"
+
+
+def test_tier_from_score_below_range():
+    assert tier_from_score(0.1) == "T4"

@@ -71,3 +71,14 @@ def contradiction_rate(sources: list[dict], contradictions: list[dict]) -> float
     if not contradictions:
         return 0.0
     return min(1.0, len(contradictions) / (len(sources) * 0.3))
+
+
+def tier_from_score(score: float) -> str:
+    """Bucket a credibility score (0.0-1.0) into tier T1/T2/T3/T4."""
+    if score >= 0.9:
+        return "T1"
+    if score >= 0.7:
+        return "T2"
+    if score >= 0.5:
+        return "T3"
+    return "T4"
