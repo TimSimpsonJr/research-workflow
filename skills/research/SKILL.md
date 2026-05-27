@@ -1050,47 +1050,120 @@ If threads are approved, save them to `STATE_DIR/approved_threads.json` for a fo
 
 ## Stage 10: Complete
 
-### 10a. Complete the run
+**Important sequencing:** `complete_run()` archives the state file (moves it under `history/{run_id}/`), so any `load_run()` call AFTER `complete_run()` returns `None`. Stage 10's telemetry, hop genealogy print, and case-record write must all use the dict returned BY `complete_run()` -- not call `load_run()` after the fact.
+
+### 10a. Complete the run (capture final state)
 
 ```bash
 python -c "
-import sys
+import sys, json
 sys.path.insert(0, 'SCRIPTS')
 from state import complete_run
 from pathlib import Path
-complete_run(Path('STATE_DIR'))
+final = complete_run(Path('STATE_DIR'))
+print(json.dumps(final))
 "
 ```
 
+Parse the printed JSON. This is the FINAL run dict (with `completed_at` set). The state file has been moved to history at this point -- do NOT call `load_run` again.
+
+Write the `final` JSON to a temp file (e.g., `STATE_DIR/../tmp/final_run.json`) so Stage 10c can re-read it without depending on shell-variable passing.
+
 ### 10b. Print summary
 
-Collect all information from the pipeline and print:
+Using the `final` dict from 10a, format and print:
 
 ```
 Research complete: {project}
 
-Created:
-  - {path of each created note}
+Created ({count} notes):
+{for each:}
+  - {path} (confidence {confidence})
+{end}
 
 Updated:
-  - {path of each updated note and MOC, or "none"}
+{for each updated note/MOC:}
+  - {path}
+{end}
 
-Skipped:
-  - {any notes skipped due to mtime conflict}
+Hop genealogy:
+{for each topic:}
+  Topic: {topic} ({hop_count} hops, confidence {confidence}{", " + status if status != "complete"})
+  {for each hop in genealogy:}
+    Hop {n} ({pattern or "initial"}): {sources_kept} sources kept
+  {end}
+{end}
 
-Warnings:
-  - {fetch failures}
-  - {media download failures}
-  - {any other errors collected during the run}
+Model usage:
+  Haiku:   {haiku.calls} calls,  {haiku.in_tokens:,} in / {haiku.out_tokens:,} out
+  Sonnet:  {sonnet.calls} calls, {sonnet.in_tokens:,} in / {sonnet.out_tokens:,} out
+  Opus:    {opus.calls} call(s), {opus.in_tokens:,} in / {opus.out_tokens:,} out
+  Ollama: {ollama.calls} calls (local -- no token cost)
+
+Estimated cost: ${estimated_cost:.2f}
+
+{if low_confidence:}
+⚠ Low confidence run (score {final_confidence_score}). Notes marked with low-confidence callouts.
+{end}
 
 {if threads approved:}
 Threads queued for follow-up:
-  - {list of approved thread topics}
+  - {topic} (priority: {priority})
   Run /research again to execute these.
 {end}
 
-Tier: {TIER} | Sources fetched: {count} | Notes written: {count}
+Tier: {TIER} | Sources fetched: {total} | Notes written: {count} | Replans: {replan_count}
 ```
+
+Cost estimation (rough):
+- Haiku: $0.25/M input + $1.25/M output
+- Sonnet: $3/M input + $15/M output
+- Opus: $15/M input + $75/M output
+
+Sum across models for the estimate.
+
+### 10c. Write case record
+
+Using the same `final` dict from 10a (do NOT re-read state -- it's archived already):
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import write_case_record
+from pathlib import Path
+cases_dir = Path('CASES_DIR')
+
+# 'final' was captured from complete_run() in stage 10a; pass it via stdin or a temp file
+import json as _json
+final = _json.loads(open('FINAL_JSON_TEMP_FILE').read())
+
+case = {
+    'case_id': final['run_id'],
+    'version': 1,
+    'query': 'PROJECT_NAME',
+    'domain_tags': DERIVED_TAGS,
+    'strategy_used': final.get('strategy', 'unified'),
+    'depths_used': {d: sum(1 for t in final['topics'] if t.get('depth') == d)
+                    for d in ['quick','standard','deep','exhaustive']},
+    'hops_executed': sum(len(t.get('hop_genealogy', [])) for t in final['topics']),
+    'confidence_per_topic': {t['topic']: (t['confidence_history'][-1] if t.get('confidence_history') else None)
+                             for t in final['topics']},
+    'contradiction_rate': max((t.get('contradiction_rate', 0.0) for t in final['topics']), default=0.0),
+    'patterns_that_worked': PATTERNS_WORKED,
+    'patterns_that_failed': PATTERNS_FAILED,
+    'outcomes': {
+        'sources_processed': SOURCES_COUNT,
+        'notes_created': CREATED_COUNT,
+        'notes_updated': UPDATED_COUNT,
+        'user_decisions': final.get('user_decisions', []),
+    },
+}
+write_case_record(cases_dir, case)
+"
+```
+
+The orchestrator writes `final` to a temp JSON file between 10a and 10c (typical pattern: write the captured JSON to `STATE_DIR/../tmp/final_run.json` for the duration of 10b/10c, then delete). DERIVED_TAGS comes from the most common tags across written notes. PATTERNS_WORKED / PATTERNS_FAILED come from per-hop telemetry (patterns that produced novel notes vs. dead ends).
 
 ---
 
