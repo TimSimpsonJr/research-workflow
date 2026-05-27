@@ -7,8 +7,10 @@ restart, and abandon flows. State lives in the vault at
 """
 
 import json
+import os
 import shutil
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -45,6 +47,69 @@ def write_shared_state_atomically(target: Path, content: dict | str) -> None:
     tmp = target.with_suffix(target.suffix + ".tmp")
     tmp.write_text(body, encoding="utf-8", newline="\n")
     tmp.replace(target)
+
+
+class LockTimeoutError(Exception):
+    """Raised when state lock can't be acquired within the timeout."""
+
+
+@contextmanager
+def acquire_state_lock(state_root: Path, timeout_s: float = 5.0,
+                       stale_after_hours: int = 1):
+    """Acquire an exclusive lock for shared-state writes (accumulator,
+    learned_patterns). Returns a context manager.
+
+    Lock file at {state_root}/.lock contains: {pid}\\n{iso_timestamp}\\n
+
+    Stale locks (timestamp older than stale_after_hours) are forcibly cleared.
+    Otherwise, waits up to timeout_s for the lock to free up.
+    Raises LockTimeoutError on timeout.
+    """
+    import time
+    state_root.mkdir(parents=True, exist_ok=True)
+    lock_file = state_root / ".lock"
+    deadline = time.monotonic() + timeout_s
+
+    while True:
+        # Check for stale lock
+        if lock_file.exists():
+            try:
+                content = lock_file.read_text().strip().split("\n")
+                if len(content) == 2:
+                    _, ts_str = content
+                    ts = datetime.fromisoformat(ts_str)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    age = datetime.now(timezone.utc) - ts
+                    if age > timedelta(hours=stale_after_hours):
+                        lock_file.unlink()  # break stale lock
+            except (ValueError, OSError):
+                # malformed lock file — treat as stale
+                try:
+                    lock_file.unlink()
+                except OSError:
+                    pass
+
+        # Try to acquire
+        try:
+            # Atomic create with O_EXCL semantics via exclusive write
+            with open(lock_file, "x") as f:
+                f.write(f"{os.getpid()}\n{datetime.now(timezone.utc).isoformat()}\n")
+            try:
+                yield
+            finally:
+                try:
+                    lock_file.unlink()
+                except OSError:
+                    pass
+            return
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise LockTimeoutError(
+                    f"Could not acquire state lock at {lock_file} within "
+                    f"{timeout_s}s — another /research run may be in progress."
+                )
+            time.sleep(0.1)
 
 
 def save_state(state_dir: Path, run: dict) -> None:

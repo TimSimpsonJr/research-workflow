@@ -657,3 +657,35 @@ def test_write_shared_state_atomically_preserves_unicode(tmp_path):
     assert "“" in raw, f"smart quote should be literal, got: {raw}"
     # Round-trip is also fine
     assert json.loads(raw) == payload
+
+
+def test_acquire_state_lock_succeeds_when_unheld(tmp_path):
+    """acquire_state_lock returns a context manager that holds the lock."""
+    from state import acquire_state_lock
+    with acquire_state_lock(tmp_path, timeout_s=1):
+        assert (tmp_path / ".lock").exists()
+    assert not (tmp_path / ".lock").exists()
+
+
+def test_acquire_state_lock_times_out_when_held(tmp_path):
+    """acquire_state_lock raises TimeoutError when another process holds it."""
+    from state import acquire_state_lock, LockTimeoutError
+    import pytest
+    # Simulate another holder: write a lock file with current PID + fresh timestamp
+    import os
+    from datetime import datetime, timezone
+    (tmp_path / ".lock").write_text(f"{os.getpid() + 99999}\n{datetime.now(timezone.utc).isoformat()}\n")
+    with pytest.raises(LockTimeoutError):
+        with acquire_state_lock(tmp_path, timeout_s=0.5):
+            pass
+
+
+def test_acquire_state_lock_breaks_stale_lock(tmp_path):
+    """Stale locks (timestamp >1hr old) are forcibly cleared."""
+    from state import acquire_state_lock
+    import os
+    from datetime import datetime, timezone, timedelta
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    (tmp_path / ".lock").write_text(f"{os.getpid() + 99999}\n{stale_ts}\n")
+    with acquire_state_lock(tmp_path, timeout_s=1):
+        pass  # should succeed, lock was stale
