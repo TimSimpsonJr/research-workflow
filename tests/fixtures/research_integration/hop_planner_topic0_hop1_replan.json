@@ -1,0 +1,13 @@
+{
+  "topic": "Test topic about Flock Safety",
+  "current_hop": 1,
+  "decision": "replan",
+  "confidence_score": 0.31,
+  "contradiction_rate": 0.0,
+  "replan_hint": {
+    "issue": "initial search returned only T3 sources; need agency data on federal sharing",
+    "suggested_pattern": "entity_expansion",
+    "suggested_query_focus": "Flock Safety federal data sharing agreements (FOIA, agency disclosures)"
+  },
+  "self_reflection": "First hop's confidence (0.31) is far below the quick-depth target (0.6). Sources are all secondary commentary. Replan to focus on entity expansion around 'federal data sharing' with primary-source bias."
+}

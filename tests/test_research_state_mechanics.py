@@ -34,6 +34,14 @@ def test_fixtures_parse_into_expected_shapes():
     planner = load_fixture("hop_planner_topic0_hop1.json")
     assert planner["decision"] in {"continue", "stop", "replan"}
 
+    # Replan-path fixture: pins the alternate decision shape so a contract drift
+    # on replan_hint would be caught even though the stop-decision fixture above
+    # never exercises it.
+    planner_replan = load_fixture("hop_planner_topic0_hop1_replan.json")
+    assert planner_replan["decision"] == "replan"
+    assert "replan_hint" in planner_replan
+    assert {"issue", "suggested_pattern", "suggested_query_focus"} <= planner_replan["replan_hint"].keys()
+
     classify = load_fixture("classify_response.json")
     assert "contradictions_detected" in classify
 
