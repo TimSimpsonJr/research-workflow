@@ -1074,11 +1074,66 @@ def test_append_confidence(tmp_path):
     append_confidence(tmp_path, topic_name="X", score=0.42)
     append_confidence(tmp_path, topic_name="X", score=0.71)
     assert load_run(tmp_path)["topics"][0]["confidence_history"] == [0.42, 0.71]
+
+
+def test_set_contradiction_rate(tmp_path):
+    from state import create_run, init_topic, set_contradiction_rate, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    set_contradiction_rate(tmp_path, topic_name="X", rate=0.18)
+    assert load_run(tmp_path)["topics"][0]["contradiction_rate"] == 0.18
+
+    # Overwrites with newer value
+    set_contradiction_rate(tmp_path, topic_name="X", rate=0.32)
+    assert load_run(tmp_path)["topics"][0]["contradiction_rate"] == 0.32
 ```
 
 **Step 2: Run to confirm failure.**
 
-**Step 3: Implement** — two helpers with the same `load → mutate → save` pattern as `record_hop`.
+**Step 3: Implement** — three helpers with the same `load → mutate → save` pattern as `record_hop`. `set_contradiction_rate` is a setter (overwrites the latest value), not a history-tracker, because the contradiction rate is recomputed from all hops' summaries each pass:
+
+```python
+def mark_topic_status(state_dir: Path, topic_name: str, status: str) -> None:
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["status"] = status
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def append_confidence(state_dir: Path, topic_name: str, score: float) -> None:
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["confidence_history"].append(score)
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def set_contradiction_rate(state_dir: Path, topic_name: str, rate: float) -> None:
+    """Overwrite the topic's contradiction_rate with the latest measurement."""
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["contradiction_rate"] = rate
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+```
 
 **Step 4: Run to confirm pass.**
 
@@ -1413,10 +1468,12 @@ Confirm there's an existing pattern for "is X installed and accessible." Follow 
 Append to `tests/test_detect_tier.py`:
 
 ```python
+import sys   # already at module top in most tests; add if missing
+
+
 def test_playwright_detection_when_unavailable(monkeypatch):
     from detect_tier import check_playwright
     # If playwright module is not installed, should return status="missing"
-    import sys
     monkeypatch.setitem(sys.modules, "playwright", None)
     result = check_playwright()
     assert result["status"] in {"missing", "error"}
@@ -1424,7 +1481,7 @@ def test_playwright_detection_when_unavailable(monkeypatch):
 
 def test_playwright_detection_when_available(monkeypatch):
     from detect_tier import check_playwright
-    # Mock the playwright import being present
+    # Mock the playwright module as present
     fake_module = type(sys)("playwright")
     monkeypatch.setitem(sys.modules, "playwright", fake_module)
     result = check_playwright()
@@ -1447,13 +1504,19 @@ def check_playwright() -> dict:
         return {"status": "missing", "reason": "playwright package not installed"}
 ```
 
-Wire it into `build_tier_report()`:
+Wire it into `build_tier_report()` by adding to the `components` dict literal (around [detect_tier.py:172-185](../../scripts/detect_tier.py:172)) — there is no `report` local variable, the function builds the components dict inline then returns a dict literal at the bottom:
 
-```python
-report["components"]["playwright"] = check_playwright()
+```diff
+ components = {
+     "ollama":  { ... },
+     "searxng": { ... },
+     "ytdlp":   {"status": "ok" if ytdlp.get("installed") else "missing"},
+     "whisper": {"status": "ok" if whisper.get("installed") else "missing"},
++    "playwright": check_playwright(),
+ }
 ```
 
-Note: Playwright is OPTIONAL — it doesn't downgrade the tier (full tier doesn't require it).
+Note: Playwright is OPTIONAL — it doesn't downgrade the tier (full tier doesn't require it). No changes to the `tier` / `missing_for_full` / `missing_for_mid` logic.
 
 **Step 5: Run to confirm pass.**
 
@@ -1541,13 +1604,16 @@ def fetch_via_playwright(url: str, timeout_ms: int = 15000) -> tuple[str, str]:
 
 **Important:** `fetch_url()` at [scripts/fetch_and_clean.py:210-228](../../scripts/fetch_and_clean.py:210) is the single per-URL composer used by BOTH `process_urls` (serial) and `_fetch_single` (parallel worker). Wire Playwright as a fallback INSIDE `fetch_url` so both callers benefit without duplication. Do NOT introduce a parallel `fetch_one_url()` function — that would skip the parallel path.
 
-**Step 1: Write the failing test**
+**Step 1: Write the failing tests**
 
 Append to `tests/test_fetch_and_clean.py`:
 
 ```python
+MIN_USEFUL_CONTENT_CHARS = 200  # threshold used by fetch_url's thin-content detection
+
+
 def test_fetch_url_falls_back_to_playwright_when_jina_and_wayback_fail(monkeypatch):
-    """When both Jina and Wayback fail, fetch_url uses Playwright as the final fallback."""
+    """When both Jina and Wayback raise, fetch_url uses Playwright as the final fallback."""
     from fetch_and_clean import fetch_url
 
     def jina_fails(url, key=None):
@@ -1567,8 +1633,32 @@ def test_fetch_url_falls_back_to_playwright_when_jina_and_wayback_fail(monkeypat
     assert method == "playwright"
 
 
-def test_fetch_url_skips_playwright_when_jina_succeeds(monkeypatch):
-    """When Jina returns content, Playwright must not be invoked."""
+def test_fetch_url_thin_jina_content_falls_through_to_playwright(monkeypatch):
+    """When Jina returns success but the content is below the useful threshold,
+    fetch_url tries Wayback then Playwright. This catches blocked-page / cookie-wall
+    cases where Jina 200s but the body is empty."""
+    from fetch_and_clean import fetch_url
+
+    monkeypatch.setattr(
+        "fetch_and_clean.fetch_via_jina",
+        lambda url, key=None: ("", ""),  # empty content (think: bot wall)
+    )
+    monkeypatch.setattr(
+        "fetch_and_clean.fetch_via_wayback",
+        lambda url, key=None: ("", ""),  # also thin
+    )
+    monkeypatch.setattr(
+        "fetch_and_clean.fetch_via_playwright",
+        lambda url, **kw: ("Real content from JS execution. " * 20, "JS Title"),
+    )
+
+    content, title, method = fetch_url("https://example-spa.com")
+    assert method == "playwright"
+    assert "Real content" in content
+
+
+def test_fetch_url_skips_playwright_when_jina_returns_useful_content(monkeypatch):
+    """When Jina returns substantial content, Playwright must not be invoked."""
     from fetch_and_clean import fetch_url
 
     monkeypatch.setattr(
@@ -1586,25 +1676,35 @@ def test_fetch_url_skips_playwright_when_jina_succeeds(monkeypatch):
     assert called == []  # Playwright never invoked
 ```
 
-**Step 2: Run to confirm failure (no Playwright fallback wired yet).**
+**Step 2: Run to confirm failure (thin-content branch not implemented yet).**
 
 **Step 3: Implement**
 
 In `scripts/fetch_and_clean.py`:
 
 1. Add at top: `from fetch_playwright import fetch_via_playwright`
-2. Extend `fetch_url()` (lines 210-228) to add a Playwright fallback AFTER the Wayback fallback:
+2. Add a module-level threshold constant: `MIN_USEFUL_CONTENT_CHARS = 200`
+3. Extend `fetch_url()` (lines 210-228) to add (a) thin-content detection after a successful Jina or Wayback call, and (b) Playwright as a final fallback:
 
 ```python
+MIN_USEFUL_CONTENT_CHARS = 200  # below this, content is likely empty/blocked
+
+
 def fetch_url(url: str, jina_api_key: str | None = None) -> tuple[str, str, str]:
     """
     Fetch URL content with fallback strategy.
     Returns (content, title, method) where method is "jina", "wayback", or "playwright".
     Raises RuntimeError if all methods fail.
+
+    Treats "succeeded but returned thin content" the same as "raised" — falls through
+    to the next fetcher. This catches the case where Jina/Wayback return 200 but the
+    page body is empty/blocked/captcha-walled.
     """
     try:
         content, title = fetch_via_jina(url, jina_api_key)
-        return content, title, "jina"
+        if len(content) >= MIN_USEFUL_CONTENT_CHARS:
+            return content, title, "jina"
+        print(f"[fetch_and_clean] Jina returned thin content ({len(content)} chars) for {url}; falling through", file=sys.stderr)
     except ValueError:
         raise  # SSRF validation errors should not be retried
     except Exception as exc:
@@ -1612,24 +1712,28 @@ def fetch_url(url: str, jina_api_key: str | None = None) -> tuple[str, str, str]
 
     try:
         content, title = fetch_via_wayback(url, jina_api_key)
-        return content, title, "wayback"
+        if len(content) >= MIN_USEFUL_CONTENT_CHARS:
+            return content, title, "wayback"
+        print(f"[fetch_and_clean] Wayback returned thin content ({len(content)} chars) for {url}; falling through", file=sys.stderr)
     except Exception as exc:
         print(f"[fetch_and_clean] Wayback fetch failed for {url}: {exc}", file=sys.stderr)
 
     # Final fallback: Playwright (only if installed)
     try:
         content, title = fetch_via_playwright(url)
-        return content, title, "playwright"
+        if len(content) >= MIN_USEFUL_CONTENT_CHARS:
+            return content, title, "playwright"
+        raise RuntimeError(f"Playwright returned thin content ({len(content)} chars)")
     except Exception as e:
         raise RuntimeError(f"All fetch methods failed for {url}") from e
 ```
 
-The function signature, return type, and existing call sites in `process_urls`/`_fetch_single` are unchanged — they receive `(content, title, "playwright")` exactly the same way they receive `(content, title, "jina")`. The `method` field already propagates into the fetched URL records, so the new value will surface naturally in telemetry.
+The function signature and return type are unchanged. The `method` field already propagates into fetched URL records.
 
 **Step 4: Run to confirm pass.**
 
 Run: `pytest tests/test_fetch_and_clean.py -v`
-Expected: all tests pass, including the two new ones. Existing tests are unaffected because they don't trigger the Playwright path.
+Expected: all tests pass. Existing tests that mock Jina to return real content still hit the `len(content) >= MIN_USEFUL_CONTENT_CHARS` branch and return `"jina"` exactly as before.
 
 **Step 5: Commit.**
 
@@ -2516,9 +2620,26 @@ Add a new "Stage 2: Triage" section between Stage 1 and the current Stage 2 (whi
 ```markdown
 ## Stage 2: Triage
 
-The resolver classifies the prompt's strategy before resolving topics.
+The resolver classifies the prompt's strategy before resolving topics. The run is created at the START of this stage so that any downstream state-writing helper (`save_state`, `record_hop`, `add_usage`, etc.) has somewhere to write to — even when the planning_only path bypasses Stage 3's full approval flow.
 
-### 2a. Dispatch topic-resolver agent (Sonnet)
+### 2a. Create the run
+
+Generate a run ID from the current date and a slugified version of the user's input (e.g., `2026-03-05-sc-alpr-research`). Then:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import create_run
+from pathlib import Path
+r = create_run(Path('STATE_DIR'), 'RUN_ID', 'TIER')
+print(json.dumps(r))
+"
+```
+
+The run begins with no topics; topics are populated after the resolver returns (in 2c.iv or Stage 3).
+
+### 2b. Dispatch topic-resolver agent (Sonnet)
 
 Read the agent definition: `REPO/agents/topic-resolver.md`
 
@@ -2533,15 +2654,15 @@ vault_root: {VAULT}
 scripts_dir: {SCRIPTS}
 ```
 
-### 2b. Parse strategy
+### 2c. Parse strategy
 
 The agent returns a JSON object. Read the top-level `strategy` field:
 
-- `planning_only`: skip to Stage 2d (one-line confirm) with the resolved topics from the same response.
-- `intent_planning`: skip to Stage 2c (Q&A loop).
-- `unified`: skip to Stage 3 (current resolve+plan flow with depth column).
+- `planning_only`: continue to Stage 2e (one-line confirm) with the resolved topics from this response.
+- `intent_planning`: continue to Stage 2d (Q&A loop).
+- `unified`: continue to Stage 3 (full resolve+plan flow with depth column). Note: the resolver has ALREADY produced topics; Stage 3 uses them rather than re-dispatching.
 
-### 2c. Intent-planning Q&A (if applicable)
+### 2d. Intent-planning Q&A (if applicable)
 
 If strategy is `intent_planning`, the response contains `clarifying_questions[]` and topics are not yet resolved. For each question (max 3 for single-topic, max 1 for batch):
 
@@ -2558,23 +2679,38 @@ vault_root: {VAULT}
 scripts_dir: {SCRIPTS}
 ```
 
-Expect the new response to have `strategy: "unified"` (rare cases: `planning_only`). Continue from 2d or Stage 3 accordingly.
+Expect the new response to have `strategy: "unified"` (rare cases: `planning_only`). Continue to 2e or Stage 3 accordingly.
 
 If the user abandons mid-Q&A (cancel / explicit abort), call `abandon_run(STATE_DIR)` and stop.
 
-### 2d. One-line confirm (planning_only)
+### 2e. Planning-only confirm (skip if strategy is unified)
 
-Show the user:
+Only entered when strategy is `planning_only`. Show the user:
 
 ```
 Researching {project} at depth {topic.depth}, ~{estimated_minutes}min. Proceed? [yes / edit / cancel]
 ```
 
-- `yes`: skip to Stage 4 (hop loop). The plan is already approved.
-- `edit`: upgrade to `unified` strategy — present the full plan as in Stage 3d below.
+- `yes`: initialize topics from the resolver response, save the strategy in state (2f), then skip to Stage 4 (hop loop). Stage 3 is bypassed.
+- `edit`: upgrade to `unified` strategy — present the full plan as in Stage 3d below. The run is already created; Stage 3 will populate topics and approve.
 - `cancel`: call `abandon_run(STATE_DIR)` and stop.
 
-### 2e. Save the strategy in state
+When `yes`: initialize topics now (since Stage 3 is being skipped):
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state, init_topic
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+plan_topics = RESOLVER_RESPONSE['topics']
+run['topics'] = [init_topic(t['topic'], t['mode'], t['depth']) for t in plan_topics]
+save_state(Path('STATE_DIR'), run)
+"
+```
+
+### 2f. Save the strategy in state
 
 Update state with strategy field:
 
@@ -2600,13 +2736,22 @@ git commit -m "feat(skill): add Stage 2 triage with strategy classification"
 
 ### Task 8.3 — Stage 3: Resolve (renumber + per-topic depth)
 
-**Step 1: Replace the existing "Stage 2: Resolve" with "Stage 3: Resolve"**
+**Note on the new flow:** The existing Stage 2 (v2) did BOTH "create the run" and "dispatch the resolver" in one step. In v3, run creation moves to Stage 2a (Task 8.2), and the resolver is dispatched in 2b (also Task 8.2). So Stage 3 in v3 is just "present the plan and get approval" — the actual resolver dispatch is upstream.
 
-Renumber. Update step `2b` → `3b`, etc., throughout the section.
+**Step 1: Strip resolver-dispatch logic from Stage 3**
+
+The existing Stage 2 (v2) lines 158-263 contain three substeps:
+- 2a. Create a new run → MOVED to Stage 2a (Task 8.2)
+- 2b. Dispatch topic-resolver agent → MOVED to Stage 2b (Task 8.2)
+- 2c. Parse response → MOVED to Stage 2c (Task 8.2)
+- 2d. Present plan for approval → KEEP, renumber to 3a
+- 2e. Save plan → KEEP, renumber to 3b
+
+After this refactor, Stage 3 is just "3a present plan for unified strategy approval" + "3b save the approved plan."
 
 **Step 2: Update the plan presentation to show depth, not priority**
 
-In the plan presentation block (3d):
+In the plan presentation block (3a, formerly 2d):
 
 ```diff
 - Topics ({count}):
@@ -2623,7 +2768,7 @@ Update the edit option: user can now edit topics, modes, AND depths.
 
 **Step 3: Initialize per-topic state with depth**
 
-In the "Save plan" subsection (3e), update the state initialization to use `init_topic` for each topic:
+In the "Save plan" subsection (3b, formerly 2e), update the state initialization to use `init_topic` for each topic. Note: the run already exists (created in Stage 2a), so we're appending topics to it, not creating it:
 
 ```bash
 python -c "
@@ -2776,19 +2921,24 @@ Parse each hop-planner response:
 
 For early-termination cases (Stage 4a returned zero sources after one alternate pattern attempt), the hop-planner can also return `decision: "stop"` with `status: "early_terminated"` — call `mark_topic_status(topic, "early_terminated")`.
 
-### 4f. Append confidence
+### 4f. Persist hop-planner's quality signals
 
-After each hop_planner response, call:
+After each hop-planner response, persist BOTH the confidence score (append to history) and the contradiction rate (overwrite latest):
 
 ```bash
 python -c "
 import sys
 sys.path.insert(0, 'SCRIPTS')
-from state import append_confidence
+from state import append_confidence, set_contradiction_rate
 from pathlib import Path
-append_confidence(Path('STATE_DIR'), topic_name='TOPIC', score=HOP_PLANNER_RESPONSE.confidence_score)
+append_confidence(Path('STATE_DIR'), topic_name='TOPIC',
+                  score=HOP_PLANNER_RESPONSE.confidence_score)
+set_contradiction_rate(Path('STATE_DIR'), topic_name='TOPIC',
+                       rate=HOP_PLANNER_RESPONSE.contradiction_rate)
 "
 ```
+
+Both signals feed the Stage 5 quality gate. Without the `set_contradiction_rate` call, `topic.contradiction_rate` stays at its `0.0` init forever and the contradiction-triggered replan branch never fires.
 
 ### 4g. Stage transition
 
@@ -2885,9 +3035,26 @@ record_user_decision(Path('STATE_DIR'), decision='DECISION_VALUE', confidence=OV
 
 Branch by decision:
 
-- **`replan`**: increment_replan once more (reaching 3). Re-mark active. Return to Stage 4. After this attempt, no more replans — if it fails again, present continue/abandon only.
-- **`continue`**: Mark the run with `low_confidence = true`. Proceed to Stage 6. The write stage adds body callouts to all written notes.
-- **`abandon`**: Call `archive_run(STATE_DIR)` with `abandoned_at_gate=True`. Print the search/fetch results paths so the user can inspect them. Stop.
+- **`replan`**: call `increment_replan` once more (reaching 3). Re-mark active. Return to Stage 4. After this attempt, no more replans — if it fails again, present continue/abandon only.
+- **`continue`**: mark the run with `low_confidence = true` (see 5d). Proceed to Stage 6. The write stage adds body callouts to all written notes.
+- **`abandon`**: set `abandoned_at_gate: true` in the run dict, save, then call `abandon_run(STATE_DIR)` (which already exists in state.py and archives via `_archive_run`). Print the archived path so the user can inspect:
+
+  ```bash
+  python -c "
+  import sys
+  sys.path.insert(0, 'SCRIPTS')
+  from state import load_run, save_state, abandon_run
+  from pathlib import Path
+  state_dir = Path('STATE_DIR')
+  run = load_run(state_dir)
+  if run is not None:
+      run['abandoned_at_gate'] = True
+      save_state(state_dir, run)
+  abandon_run(state_dir)
+  "
+  ```
+
+  The archived files land under `STATE_DIR/history/{run_id}/` (the existing `_archive_run` destination). Print that path to the user.
 
 ### 5d. Save low-confidence flag
 
