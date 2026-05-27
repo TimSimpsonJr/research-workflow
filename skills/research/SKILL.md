@@ -592,13 +592,14 @@ If `failing_topics` is non-empty AND `replan_count < 2`, run an auto-replan cycl
 2. **Re-admit each failing topic into the hop loop.** A topic that exhausted its initial budget has `current_hop == max_hops`, so Stage 4's admission filter (`current_hop < max_hops`) would otherwise skip it. To enable another hop without rewinding completed work, call `bump_max_hops(topic, increment=1)`. This gives the topic exactly one additional hop slot.
 3. Call `mark_topic_status(topic, "active")` to re-admit.
 4. Call `increment_replan(STATE_DIR)`.
-5. Return to Stage 4 (the hop loop runs one more pass; only re-admitted topics dispatch search/fetch/summarize/hop-planner). Stage 4a's search-agent reads `topic.replan_hint` to bias the next query toward the suggested pattern/focus.
+5. **Roll the stage marker back to `hop_loop`** via `update_stage(state_dir, "hop_loop")`. Without this, the run's `stage` field stays at `quality_gate` -- a crash after re-admission would resume into the gate and re-run it instead of running another hop.
+6. Return to Stage 4 (the hop loop runs one more pass; only re-admitted topics dispatch search/fetch/summarize/hop-planner). Stage 4a's search-agent reads `topic.replan_hint` to bias the next query toward the suggested pattern/focus.
 
 ```bash
 python -c "
 import sys
 sys.path.insert(0, 'SCRIPTS')
-from state import load_run, set_replan_hint, bump_max_hops, mark_topic_status, increment_replan
+from state import load_run, set_replan_hint, bump_max_hops, mark_topic_status, increment_replan, update_stage
 from pathlib import Path
 state_dir = Path('STATE_DIR')
 run = load_run(state_dir)
@@ -608,15 +609,21 @@ for t in FAILING_TOPICS:
     bump_max_hops(state_dir, t['topic'], increment=1)
     mark_topic_status(state_dir, t['topic'], 'active')
 increment_replan(state_dir)
+update_stage(state_dir, 'hop_loop')
 "
 ```
 
-### 5c. User prompt (after 2 auto-replan failures)
+### 5c. User prompt (auto-replan exhausted)
 
-If `replan_count == 2`, present the diagnostic:
+If `replan_count >= 2`, present the diagnostic. There are two sub-cases:
+
+- **First time the user sees this prompt** (`replan_count == 2`): the two auto-replan attempts have completed and the user can opt into one more focused cycle (`replan`), accept lower-confidence notes (`continue`), or stop (`abandon`).
+- **After the user-driven `replan` already fired** (`replan_count >= 3`): no more replans are allowed -- the gate has now spent the initial budget plus two auto-replans plus one user-approved replan. Present only `continue` and `abandon`.
+
+The branch is `>= 2` (not `== 2`) deliberately: this catches the post-manual-replan re-entry to the gate. Without it, a third quality-gate failure would fall through both 5b's `replan_count < 2` guard and the old `== 2` check, leaving the pipeline stuck.
 
 ```
-⚠ Quality gate triggered after {replan_count} auto-replan attempts.
+⚠ Quality gate triggered after {replan_count} replan attempts.
 
 Topic-by-topic results:
 {for each topic:}
@@ -629,10 +636,14 @@ Weakest topics:
 {end}
 
 Options:
+{if replan_count == 2:}
   - replan: try one more cycle with focused hints (1 extension max)
+{end}
   - continue: write notes anyway, with low-confidence flags
   - abandon: stop here, preserve search/fetch results for inspection
 ```
+
+**After `replan_count >= 3`, the user is offered only `continue` or `abandon` -- no more replans.** Do not present `replan` as an option in that case; reject it if the user types it anyway and re-prompt.
 
 Wait for the user's response.
 
@@ -650,13 +661,31 @@ record_user_decision(Path('STATE_DIR'), decision='DECISION_VALUE', confidence=OV
 
 Branch by decision:
 
-- **`replan`**: apply the same re-admission recipe as Stage 5b (so the topic actually makes it back into the hop loop):
+- **`replan`** (only valid when `replan_count == 2`): apply the same re-admission recipe as Stage 5b (so the topic actually makes it back into the hop loop):
   - For each failing topic, if `replan_hint` is None, synthesize one (the user may also supply a manual hint via free-text input -- capture it as the `issue` field).
   - Call `bump_max_hops(topic, increment=1)` so `current_hop < max_hops` again.
   - Call `mark_topic_status(topic, "active")`.
   - Call `increment_replan(STATE_DIR)` once more (reaching 3).
+  - Call `update_stage(state_dir, "hop_loop")` so resume targets the hop loop, not the gate.
 
-  Return to Stage 4. After this attempt, no more replans -- if it fails again, present continue/abandon only.
+  ```bash
+  python -c "
+  import sys
+  sys.path.insert(0, 'SCRIPTS')
+  from state import set_replan_hint, bump_max_hops, mark_topic_status, increment_replan, update_stage
+  from pathlib import Path
+  state_dir = Path('STATE_DIR')
+  for t in FAILING_TOPICS:
+      if t['replan_hint'] is None:
+          set_replan_hint(state_dir, t['topic'], SYNTHESIZED_HINT)
+      bump_max_hops(state_dir, t['topic'], increment=1)
+      mark_topic_status(state_dir, t['topic'], 'active')
+  increment_replan(state_dir)
+  update_stage(state_dir, 'hop_loop')
+  "
+  ```
+
+  Return to Stage 4. After this attempt, no more replans -- if it fails again, re-enter Stage 5c with `replan_count == 3` and present only continue / abandon.
 - **`continue`**: mark the run with `low_confidence = true` (see 5d). Proceed to Stage 6. The write stage adds body callouts to all written notes.
 - **`abandon`**: set `abandoned_at_gate: true` in the run dict, save, then call `abandon_run(STATE_DIR)` (which already exists in state.py and archives via `_archive_run`). Print the archived path so the user can inspect:
 
