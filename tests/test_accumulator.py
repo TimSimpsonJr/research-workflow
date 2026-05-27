@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from accumulator import (
     load_accumulator,
     save_accumulator,
@@ -66,10 +65,29 @@ def test_load_corrupt_returns_empty_with_warning(tmp_path):
 
 def test_load_version_mismatch_returns_empty_with_warning(tmp_path):
     """Schema version mismatch returns empty Accumulator + schema_mismatch warning."""
-    import json as _j
     target = tmp_path / "accumulator.json"
-    target.write_text(_j.dumps({"version": 99, "entries": []}))
+    target.write_text(json.dumps({"version": 99, "entries": []}))
     acc, warnings = load_accumulator(target)
     assert acc.entries == []
     assert len(warnings) == 1
     assert "accumulator_schema_mismatch" in warnings[0]
+
+
+def test_load_non_dict_root_returns_empty_with_warning(tmp_path):
+    """JSON root that's not a dict (e.g., a list) returns empty + corrupted warning."""
+    target = tmp_path / "accumulator.json"
+    target.write_text("[]")
+    acc, warnings = load_accumulator(target)
+    assert acc.entries == []
+    assert len(warnings) == 1
+    assert "accumulator_corrupted" in warnings[0]
+
+
+def test_load_invalid_utf8_returns_empty_with_warning(tmp_path):
+    """Invalid UTF-8 returns empty + corrupted warning instead of crashing."""
+    target = tmp_path / "accumulator.json"
+    target.write_bytes(b"\xff\xfe invalid utf-8")
+    acc, warnings = load_accumulator(target)
+    assert acc.entries == []
+    assert len(warnings) == 1
+    assert "accumulator_corrupted" in warnings[0]
