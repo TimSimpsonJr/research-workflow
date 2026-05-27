@@ -88,7 +88,7 @@ def load_learned_patterns(path: Path) -> tuple[LearnedPatternsFile, list[str]]:
         return LearnedPatternsFile(), warnings
     try:
         text = path.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         warnings.append(f"learned_patterns_corrupted: {path} could not be read ({e})")
         return LearnedPatternsFile(), warnings
     parsed = _parse_learned_patterns(text)
@@ -101,6 +101,102 @@ def load_learned_patterns(path: Path) -> tuple[LearnedPatternsFile, list[str]]:
     return parsed, warnings
 
 
+_DOMAIN_HEADING = re.compile(r"^##\s+(.+)$")
+_STAGE_HEADING = re.compile(r"^###\s+(.+)$")
+_PATTERN_HEADER = re.compile(r"^-\s+\*\*(.+?)\*\*\s+—\s+(.+)$")
+_FIELD_LINE = re.compile(r"^\s+-\s+(\w+):\s*(.+)$")
+_SCORE_LINE = re.compile(r"^(\d+)W\s*/\s*(\d+)L")
+
+
 def _parse_learned_patterns(text: str) -> LearnedPatternsFile:
-    # Stub for now — implemented in next task.
-    raise NotImplementedError("Parser comes in task 3.2")
+    lines = text.splitlines()
+    version = LEARNED_PATTERNS_SCHEMA_VERSION
+
+    # Strip YAML frontmatter if present
+    i = 0
+    if i < len(lines) and lines[i].strip() == "---":
+        i += 1
+        while i < len(lines) and lines[i].strip() != "---":
+            if lines[i].startswith("version:"):
+                try:
+                    version = int(lines[i].split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+            i += 1
+        i += 1  # past closing ---
+
+    patterns: list[LearnedPattern] = []
+    current_domain: list[str] = []
+    current_stage: str | None = None
+    pending: dict | None = None
+
+    def _flush():
+        nonlocal pending
+        if pending is None:
+            return
+        # Validate required fields
+        if "id" not in pending or "score" not in pending:
+            print(
+                f"[learned_patterns] skipping malformed entry "
+                f"(missing id or score): {pending.get('name', '?')}"
+            )
+            pending = None
+            return
+        # Parse score
+        m = _SCORE_LINE.match(pending["score"])
+        if not m:
+            print(
+                f"[learned_patterns] skipping malformed entry "
+                f"(bad score: {pending['score']!r}): {pending.get('name', '?')}"
+            )
+            pending = None
+            return
+        wins, losses = int(m.group(1)), int(m.group(2))
+        try:
+            demotion_count = int(pending.get("demotions", "0"))
+        except ValueError:
+            demotion_count = 0
+        patterns.append(LearnedPattern(
+            id=pending["id"].strip("`"),
+            name=pending["name"],
+            body=pending["body"],
+            domain_tags=list(current_domain),
+            target_stage=current_stage or "search",
+            category=pending.get("category", ""),
+            wins=wins,
+            losses=losses,
+            promoted_at=pending.get("promoted", ""),
+            demotion_count=demotion_count,
+        ))
+        pending = None
+
+    while i < len(lines):
+        line = lines[i]
+        domain_match = _DOMAIN_HEADING.match(line)
+        stage_match = _STAGE_HEADING.match(line)
+        header_match = _PATTERN_HEADER.match(line)
+        field_match = _FIELD_LINE.match(line)
+
+        if domain_match:
+            _flush()
+            current_domain = [t.strip() for t in domain_match.group(1).split("/")]
+            current_stage = None
+        elif stage_match:
+            _flush()
+            label = stage_match.group(1).strip()
+            current_stage = _LABEL_TO_STAGE.get(label, "search")
+        elif header_match:
+            _flush()
+            pending = {
+                "name": header_match.group(1).strip(),
+                "body": header_match.group(2).strip(),
+            }
+        elif field_match and pending is not None:
+            key = field_match.group(1).lower()
+            value = field_match.group(2).strip()
+            pending[key] = value
+
+        i += 1
+
+    _flush()
+    return LearnedPatternsFile(version=version, patterns=patterns)
