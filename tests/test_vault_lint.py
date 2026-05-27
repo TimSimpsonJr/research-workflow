@@ -3,12 +3,6 @@
 
 import pytest
 from pathlib import Path
-import os
-
-os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
-os.environ.setdefault("VAULT_PATH", "C:/Users/tim/OneDrive/Documents/Tim's Vault")
-os.environ.setdefault("INBOX_PATH", "C:/Users/tim/OneDrive/Documents/Tim's Vault/Inbox")
-os.environ.setdefault("FRONTMATTER_FIELDS", "title,source,tags,created")
 
 
 def test_parse_frontmatter_valid(tmp_path):

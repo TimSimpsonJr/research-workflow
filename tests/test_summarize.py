@@ -2,14 +2,9 @@
 """Tests for summarize.py — article summarization via Ollama or file output."""
 
 import json
-import os
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-
-os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
-os.environ.setdefault("VAULT_PATH", "C:/fake/vault")
-os.environ.setdefault("INBOX_PATH", "C:/fake/vault/Inbox")
 
 
 # ── summarize_article ────────────────────────────

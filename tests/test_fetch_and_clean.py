@@ -6,11 +6,6 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-import os
-
-os.environ.setdefault("ANTHROPIC_API_KEY", "sk-ant-test")
-os.environ.setdefault("VAULT_PATH", "C:/fake/vault")
-os.environ.setdefault("INBOX_PATH", "C:/fake/vault/Inbox")
 
 
 # ── url_cache_key ────────────────────────────
