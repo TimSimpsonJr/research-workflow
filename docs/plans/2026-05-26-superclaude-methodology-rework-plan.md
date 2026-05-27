@@ -929,6 +929,19 @@ def save_state(state_dir: Path, run: dict) -> None:
       assert run["stage"] == "triage"
   ```
 
+  **Also update the pre-existing test** at `tests/test_state.py:10-16` (`test_create_run_writes_current_run`) — line 15 asserts `run["stage"] == "resolve"`, which will fail after this change:
+
+  ```diff
+   def test_create_run_writes_current_run(tmp_path):
+       from state import create_run
+       run = create_run(tmp_path, "sc-alpr", "mid")
+       assert (tmp_path / "current_run.json").exists()
+       assert run["run_id"] == "sc-alpr"
+  -    assert run["stage"] == "resolve"
+  +    assert run["stage"] == "triage"
+       assert run["tier_detected"] == "mid"
+  ```
+
 **Step 5: Run to confirm pass.**
 
 Run: `pytest tests/test_state.py -v`
@@ -1834,7 +1847,21 @@ Update the existing mocks to use bodies above the threshold. Specifically:
 +    assert content == long_archived
 ```
 
-The `test_fetch_url_raises_when_both_fail` test (current line 143) does not need updating — it mocks both fetchers to raise, which still works.
+The `test_fetch_url_raises_when_both_fail` test (current line 143) **must also be updated** to patch `fetch_via_playwright` to raise. Otherwise the test will reach the real Playwright fallback — which would actually try a network fetch if Playwright is installed locally, breaking the offline guarantee:
+
+```diff
+ def test_fetch_url_raises_when_both_fail():
+     from fetch_and_clean import fetch_url
+     with patch("fetch_and_clean.fetch_via_jina", side_effect=Exception("jina fail")):
+         with patch("fetch_and_clean.fetch_via_wayback", side_effect=Exception("wayback fail")):
+-            with pytest.raises(RuntimeError, match="All fetch methods failed"):
+-                fetch_url("https://example.com")
++            with patch("fetch_and_clean.fetch_via_playwright", side_effect=Exception("playwright fail")):
++                with pytest.raises(RuntimeError, match="All fetch methods failed"):
++                    fetch_url("https://example.com")
+```
+
+Rename if helpful (e.g., `test_fetch_url_raises_when_all_fail`) to reflect the three-fetcher reality.
 
 **Step 5: Run to confirm pass**
 
