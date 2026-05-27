@@ -669,9 +669,28 @@ save_state(Path('STATE_DIR'), run)
 
 ---
 
-## Stage 7: Classify
+## Stage 6: Classify
 
-### 7a. Dispatch classify agent
+### 6a. Aggregate per-hop summaries
+
+Before dispatching the classify agent, aggregate all per-hop summary files into a single `summaries.json`:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+all_summaries = []
+for hop_file in sorted(state_dir.glob('summaries_hop*.json')):
+    data = json.loads(hop_file.read_text())
+    all_summaries.extend(data.get('items', []))
+combined = {'topic': '{project_name}', 'items': all_summaries}
+(state_dir / 'summaries.json').write_text(json.dumps(combined, indent=2))
+"
+```
+
+### 6b. Dispatch classify agent
 
 Read the agent definition: `REPO/agents/classify-agent.md`
 
@@ -682,24 +701,25 @@ Dispatch via the Task tool:
 
 ```json
 {
-  "summaries": {the summaries object from Stage 6},
+  "summaries": {the aggregated summaries object from 6a},
   "vault_root": "VAULT",
   "scripts_dir": "SCRIPTS",
   "shared_context_files": {from the research plan}
 }
 ```
 
-### 7b. Parse classification
+### 6c. Parse classification
 
 The agent returns a single JSON object. Parse it to extract:
 - `notes_to_create` -- list of note specs with `title`, `filename`, `folder`, `action`, `type`, `write_model`, `content_summary`, `source_urls`, `tags`, `links`, `stub_links`, `media`, `priority`
 - `vault_context` -- `existing_notes_found`, `suggested_moc_update`, `folder_conventions`
+- `contradictions_detected` -- list of `{source_a, source_b, claim_a, claim_b, topic}` objects flagging where sources disagree (Phase 5 addition). May be empty.
 
 If `notes_to_create` is empty:
 Output: `Classification returned no notes to create. Check fetch results for content quality.`
 Complete the run and stop.
 
-### 7c. Save classification
+### 6d. Save classification
 
 Write to `STATE_DIR/classification.json` and update state:
 ```bash
@@ -714,11 +734,11 @@ update_stage(Path('STATE_DIR'), 'write')
 
 ---
 
-## Stage 8: Write Notes
+## Stage 7: Write Notes
 
 This is the core stage. **You (the Sonnet orchestrator) write the notes.** For synthesis notes, you escalate to Opus.
 
-### 8a. Sort notes by priority tier
+### 7a. Sort notes by priority tier
 
 Order the `notes_to_create` list:
 1. `primary` (deep coverage) -- Tier 1 notes first
@@ -727,7 +747,7 @@ Order the `notes_to_create` list:
 
 Writing Tier 1 first ensures that Tier 2 and Tier 3 notes can reference them with wikilinks.
 
-### 8b. For each note, in order:
+### 7b. For each note, in order:
 
 #### i. Check for mtime conflict
 
@@ -781,7 +801,25 @@ source: ["{source_urls joined}"]
 created: {today's date, YYYY-MM-DD}
 write_model: {sonnet or opus}
 research_run: {RUN_ID}
+confidence: {topic.confidence_history[-1] or 1.0 if single-hop}
+contradictions_noted: {true if this note's sources appear in contradictions_detected else false}
+primary_sources: {count of sources where is_primary == true}
+hop_genealogy: [{list of pattern(from) strings for multi-hop runs, omitted for single-hop}]
 ---
+```
+
+**Body callouts (NEW for v3):**
+
+If `run.low_confidence == true`, prepend this callout to the note body BEFORE the H1:
+
+```
+> ⚠ **Research confidence: {run.final_confidence_score:.2f}**. Several topics in this run did not reach the standard confidence target. Verify claims before citing.
+```
+
+If any contradiction in `classification.contradictions_detected` references a source URL that overlaps with this note's `source_urls`, prepend (or merge with the prior callout) a contradiction callout:
+
+```
+> ⚠ **Source contradictions noted.** Two or more sources disagree on aspects of this topic. See `## Sources` section for details.
 ```
 
 **Wikilinks:**
@@ -799,6 +837,15 @@ research_run: {RUN_ID}
 **Sources:**
 - Include the full source URL as an inline link at the point where it is first referenced in the body text.
 - Add a `## Sources` section at the bottom listing all source URLs.
+- In the Sources list, annotate each URL inline with tier and contradiction notes. Match contradictions by URL: any source URL that appears in a `contradictions_detected[].source_a` or `source_b` gets the contradiction annotation:
+
+  ```
+  ## Sources
+
+  - https://source-a/ (T1) -- claims X
+  - https://source-b/ (T2) -- claims Y (contradicts source-a on Z)
+  ```
+
 - Every factual claim from external research must be traceable to its source.
 
 **Format matching:**
@@ -842,7 +889,7 @@ update_stage(Path('STATE_DIR'), 'write', {'total_notes': TOTAL, 'completed': COM
 "
 ```
 
-### 8c. Update MOC files
+### 7c. Update MOC files
 
 After all notes are written:
 
