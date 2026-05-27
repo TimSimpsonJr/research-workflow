@@ -149,8 +149,13 @@ def analyze(
                 last_updated_at=now,
             ))
         else:
-            # Accumulator entry exists — defer to the unified demote() helper
-            # which already implements the 1st/2nd demotion rules correctly.
+            # Accumulator entry exists — sync its demotion_count UP to the
+            # learned_pattern's count before deferring to demote(). Without
+            # this, a heuristic refresh after re-graduation could have created
+            # a fresh accumulator entry with demotion_count=0, masking the
+            # fact that learned_pattern already has demotion_count=1; the
+            # 2nd-demotion -> rejected rule would then never fire.
+            existing.demotion_count = max(existing.demotion_count, target.demotion_count)
             demote(accumulator, target.id)
         # Remove from learned regardless of new status (rejected patterns live in accumulator)
         learned.patterns = [p for p in learned.patterns if p.id != target.id]

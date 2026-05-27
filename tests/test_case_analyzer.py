@@ -237,3 +237,73 @@ def test_contradiction_flagged_at_promotion_time(tmp_path):
     contradiction = result.contradictions[0]
     assert contradiction["candidate_pattern_id"] == "candidate-pid"
     assert "graduated-pid" in contradiction["conflicting_graduated_ids"]
+
+
+def test_demote_syncs_count_when_existing_entry_is_fresh(tmp_path):
+    """When learned_pattern.demotion_count exceeds existing accumulator
+    entry's demotion_count (e.g., because record_observation recreated the
+    entry after re-graduation), demote() must still honor the higher count
+    so the 2nd-demotion -> rejected rule fires.
+
+    Regression for the latent bug surfaced in Phase 9's Task 9.2 trajectory test.
+    """
+    from case_analyzer import analyze
+    from accumulator import Accumulator, AccumulatorEntry, save_accumulator, load_accumulator
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, save_learned_patterns
+    from datetime import datetime, timezone
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+    now = datetime.now(timezone.utc).isoformat()
+    pid = "test-pattern-id"
+
+    # Seed learned_patterns: pattern P with demotion_count=1 (previously demoted, re-graduated)
+    # AND scored badly (low W/L ratio, will trigger demotion sweep)
+    save_learned_patterns(lp_path, LearnedPatternsFile(patterns=[
+        LearnedPattern(
+            id=pid, name="Test pattern", body="body",
+            domain_tags=["mixed"], target_stage="search", category="source-tier-bias",
+            wins=1, losses=10,  # ratio 1/11 = 0.09 < 0.4 -> demote
+            promoted_at="2026-05-01", demotion_count=1,
+        ),
+    ]))
+
+    # Seed accumulator: P entry has demotion_count=0 (fresh — record_observation
+    # recreated it after re-graduation)
+    save_accumulator(acc_path, Accumulator(entries=[
+        AccumulatorEntry(
+            pattern_id=pid, name="Test pattern", category="source-tier-bias",
+            target_stage="search", domain_tags=["mixed"],
+            sessions_seen=1, sessions_since_last_seen=0, status="hold",
+            raised_bar=False, promotion_pending=False, demotion_count=0,
+            evidence=[], proposed_promotion_body="body",
+            created_at=now, last_updated_at=now,
+        ),
+    ]))
+
+    # Drive analyzer with a minimal case
+    case = {
+        "case_id": "c1", "domain_tags": ["other"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.8}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {"source_tiers": {}, "hop_chain": [], "queries": []},
+    }
+    import json
+    (cases_dir / "c1.json").write_text(json.dumps(case))
+    result = analyze(
+        case_path=cases_dir / "c1.json",
+        accumulator_path=acc_path, learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+    )
+
+    # Should have demoted exactly once
+    assert result.demotions_applied == 1
+    # And the accumulator entry should now be at status="rejected"
+    # (1 + 1 = 2 -> permanent retirement)
+    acc, _ = load_accumulator(acc_path)
+    entry = next(e for e in acc.entries if e.pattern_id == pid)
+    assert entry.status == "rejected", \
+        f"expected status='rejected' (demotion_count synced from 0 to 1, then demote() -> 2), got {entry.status!r}"
+    assert entry.demotion_count == 2
