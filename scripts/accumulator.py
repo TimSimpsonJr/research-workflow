@@ -157,14 +157,24 @@ def record_observation(
 
 def tick_staleness(acc: Accumulator, seen_pattern_ids: set[str]) -> None:
     """Increment sessions_since_last_seen for entries not in seen_pattern_ids.
-    Called once per analyzer run after all observations are recorded."""
+    Called once per analyzer run after all observations are recorded.
+
+    Skips entries with status != "hold" (rejected/promotion_pending entries
+    are not subject to staleness).
+
+    Does NOT update last_updated_at — staleness ticks are a metronome signal,
+    not a meaningful state change.
+    """
     for entry in acc.entries:
         if entry.pattern_id not in seen_pattern_ids and entry.status == "hold":
             entry.sessions_since_last_seen += 1
 
 
 def mark_rejected(acc: Accumulator, pattern_id: str) -> None:
-    """Mark an entry as permanently rejected. Clears promotion_pending."""
+    """Mark an entry as permanently rejected. Clears promotion_pending.
+
+    No-op if pattern_id is not found.
+    """
     for entry in acc.entries:
         if entry.pattern_id == pattern_id:
             entry.status = "rejected"
@@ -174,9 +184,15 @@ def mark_rejected(acc: Accumulator, pattern_id: str) -> None:
 
 
 def mark_promotion_pending(acc: Accumulator, pattern_id: str) -> None:
-    """Flag an entry as eligible for promotion; status -> promotion_pending."""
+    """Flag an entry as eligible for promotion; status -> promotion_pending.
+
+    No-op if the entry is already rejected (rejected entries are permanent).
+    No-op if pattern_id is not found.
+    """
     for entry in acc.entries:
         if entry.pattern_id == pattern_id:
+            if entry.status == "rejected":
+                return
             entry.promotion_pending = True
             entry.status = "promotion_pending"
             entry.last_updated_at = datetime.now(timezone.utc).isoformat()
@@ -184,7 +200,10 @@ def mark_promotion_pending(acc: Accumulator, pattern_id: str) -> None:
 
 
 def clear_promotion_pending(acc: Accumulator, pattern_id: str) -> None:
-    """Clear promotion_pending flag; status -> hold (user picked 'hold')."""
+    """Clear promotion_pending flag; status -> hold (user picked 'hold').
+
+    No-op if pattern_id is not found.
+    """
     for entry in acc.entries:
         if entry.pattern_id == pattern_id:
             entry.promotion_pending = False
@@ -194,7 +213,10 @@ def clear_promotion_pending(acc: Accumulator, pattern_id: str) -> None:
 
 
 def remove_entry(acc: Accumulator, pattern_id: str) -> None:
-    """Remove entry by pattern_id (used after successful graduation)."""
+    """Remove entry by pattern_id (used after successful graduation).
+
+    No-op if pattern_id is not found.
+    """
     acc.entries = [e for e in acc.entries if e.pattern_id != pattern_id]
 
 
@@ -202,6 +224,8 @@ def demote(acc: Accumulator, pattern_id: str) -> None:
     """Demote a previously graduated pattern back into the accumulator.
     First demotion: status=hold, raised_bar=True, sessions_seen reset to 0.
     Second demotion: status=rejected (permanent).
+
+    No-op if pattern_id is not found.
     """
     now = datetime.now(timezone.utc).isoformat()
     for entry in acc.entries:

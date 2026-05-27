@@ -93,6 +93,19 @@ def test_load_invalid_utf8_returns_empty_with_warning(tmp_path):
     assert "accumulator_corrupted" in warnings[0]
 
 
+def test_load_entry_shape_mismatch_returns_empty_with_warning(tmp_path):
+    """Valid JSON + version, but an entry missing required fields → corrupted warning."""
+    target = tmp_path / "accumulator.json"
+    target.write_text(json.dumps({
+        "version": ACCUMULATOR_SCHEMA_VERSION,
+        "entries": [{"pattern_id": "p1"}],  # all other required fields missing
+    }))
+    acc, warnings = load_accumulator(target)
+    assert acc.entries == []
+    assert len(warnings) == 1
+    assert "accumulator_corrupted" in warnings[0]
+
+
 def test_record_observation_new_pattern():
     """A pattern_id not in the accumulator gets added with sessions_seen=1."""
     from accumulator import Accumulator, record_observation
@@ -209,6 +222,22 @@ def test_mark_promotion_pending():
     mark_promotion_pending(acc, "p1")
     assert acc.entries[0].promotion_pending is True
     assert acc.entries[0].status == "promotion_pending"
+
+
+def test_mark_promotion_pending_skips_rejected_entries():
+    """mark_promotion_pending is a no-op for rejected entries (defense-in-depth)."""
+    from accumulator import Accumulator, AccumulatorEntry, mark_promotion_pending
+    e = AccumulatorEntry(
+        pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], sessions_seen=5, sessions_since_last_seen=0,
+        status="rejected", raised_bar=False, promotion_pending=False,
+        demotion_count=2, evidence=[], proposed_promotion_body="",
+        created_at="", last_updated_at="",
+    )
+    acc = Accumulator(entries=[e])
+    mark_promotion_pending(acc, "p1")
+    assert acc.entries[0].status == "rejected"
+    assert acc.entries[0].promotion_pending is False
 
 
 def test_clear_promotion_pending_returns_to_hold():
