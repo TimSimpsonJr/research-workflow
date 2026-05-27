@@ -1340,6 +1340,78 @@ write_case_record(cases_dir, case)
 
 The orchestrator writes `final` to a temp JSON file between 10a and 10c (typical pattern: write the captured JSON to `STATE_DIR/../tmp/final_run.json` for the duration of 10b/10c, then delete). DERIVED_TAGS comes from the most common tags across written notes. PATTERNS_WORKED / PATTERNS_FAILED come from per-hop telemetry (patterns that produced novel notes vs. dead ends).
 
+### 10d. Run case analyzer (v3.1.0)
+
+Run via Bash:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from case_analyzer import analyze
+from pathlib import Path
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    result = analyze(
+        case_path=Path('CASE_PATH'),
+        accumulator_path=Path('ACCUMULATOR_PATH'),
+        learned_patterns_path=Path('LEARNED_PATTERNS_PATH'),
+        cases_dir=Path('CASES_DIR'),
+    )
+print(json.dumps({
+    'promotion_candidates': [
+        {'pattern_id': c.pattern_id, 'name': c.name,
+         'proposed_promotion_body': c.proposed_promotion_body,
+         'evidence': c.evidence}
+        for c in result.promotion_candidates
+    ],
+    'contradictions': result.contradictions,
+    'warnings': result.warnings,
+    'score_updates_applied': result.score_updates_applied,
+    'demotions_applied': result.demotions_applied,
+}))
+"
+```
+
+Substitute `STATE_ROOT_FOR_VAULT` with `{VAULT}/.research-workflow/`, `CASE_PATH` with the path to the just-written case JSON (under `{VAULT}/.research-workflow/cases/`), `ACCUMULATOR_PATH` with `{VAULT}/.research-workflow/accumulator.json`, `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`, and `CASES_DIR` with `{VAULT}/.research-workflow/cases/`.
+
+Parse the JSON output.
+
+**Corruption handling (v3.1.0 policy: no automatic recovery, no rebuild UX).**
+
+`analyze()` itself protects state files: if `accumulator.json` or `learned_patterns.md` could not be parsed (or had a schema-version mismatch), the analyzer **does not write back to that file**. So a corrupt file stays as-is on disk -- the user can inspect or recover it. The trade-off is that any in-memory updates (score increments, new candidates, demotion sweep results) that would have touched the corrupted store are discarded for this run.
+
+If `warnings` contains any of these markers:
+- `accumulator_corrupted: ...`
+- `accumulator_schema_mismatch: ...`
+- `learned_patterns_corrupted: ...`
+- `learned_patterns_schema_mismatch: ...`
+
+Surface them to the user at Stage 10d output (these flow through to Stage 10's completion summary anyway via state telemetry), with a clear advisory:
+
+```
+WARNING: v3.1.0 pattern learning state was not updated this run:
+  {warning text(s) from analyzer}
+
+To reset the affected store, delete the file manually:
+  {VAULT}/.research-workflow/accumulator.json
+  {VAULT}/.research-workflow/learned_patterns.md
+The next /research run will start with an empty store and rebuild from
+new cases going forward. Existing case history at
+{VAULT}/.research-workflow/cases/ is unaffected.
+```
+
+(There is no in-pipeline rebuild flow in v3.1.0. Corrupt-state recovery is rare; the simpler "user deletes file -> fresh start" path was preferred over carrying the complexity of a rebuild-from-history mechanism. Revisit in v3.1.x if real usage shows this is too coarse.)
+
+**Stage 10e gating.** If any `learned_patterns_*` warning is present, **skip Stage 10e entirely for this run** -- even if `promotion_candidates` is non-empty. Stage 10e's promote path would otherwise be unable to write the graduated pattern (analyzer refused the write). Log: "Skipping graduation prompts -- learned_patterns.md needs manual repair first."
+
+**Normal flow after warnings handling.**
+
+If `promotion_candidates` is non-empty AND no `learned_patterns_*` warnings, proceed to Stage 10e. Otherwise skip 10e.
+
+If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised), log to state telemetry and continue silently. The run still completes; the analyzer just didn't update state this round.
+
 ---
 
 ## Error Handling
