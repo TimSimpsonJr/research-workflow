@@ -864,7 +864,31 @@ def save_state(state_dir: Path, run: dict) -> None:
 
   This helper is consumed by every subsequent task in Phase 2 (2.4, 2.5, 2.6, 2.7) and by SKILL.md stages. Introducing it here avoids the dependency-order trap of using it in 2.4 before it's defined.
 
-- In `create_run()`, include `"version": STATE_VERSION` in the returned dict and written JSON.
+- In `create_run()`, two changes:
+  - Include `"version": STATE_VERSION` in the returned dict and written JSON.
+  - Change the initial `"stage"` from `"resolve"` to `"triage"`. v3 makes Triage the first stage that does any work after run creation; a crash before Stage 4 must resume at Triage, not Resolve.
+
+  ```diff
+   run = {
+       "run_id": run_id,
+       "started_at": datetime.now(timezone.utc).isoformat(),
+  -    "stage": "resolve",
+  +    "stage": "triage",
+  +    "version": STATE_VERSION,
+       "stage_progress": {},
+       "tier_detected": tier,
+       "plan_approved": False,
+   }
+  ```
+
+  Add a test for the initial stage:
+
+  ```python
+  def test_create_run_initial_stage_is_triage(tmp_path):
+      from state import create_run
+      run = create_run(tmp_path, run_id="r1", tier="full")
+      assert run["stage"] == "triage"
+  ```
 
 **Step 5: Run to confirm pass.**
 
@@ -1485,7 +1509,9 @@ def test_playwright_detection_when_available(monkeypatch):
     fake_module = type(sys)("playwright")
     monkeypatch.setitem(sys.modules, "playwright", fake_module)
     result = check_playwright()
-    assert result["status"] in {"ok", "missing"}  # depends on real environment
+    # With the fake module injected, the import in check_playwright succeeds
+    # and status MUST be "ok". Asserting strictly so a wiring regression fails loudly.
+    assert result["status"] == "ok"
 ```
 
 **Step 3: Run to confirm failure (function doesn't exist).**
@@ -1730,12 +1756,53 @@ def fetch_url(url: str, jina_api_key: str | None = None) -> tuple[str, str, str]
 
 The function signature and return type are unchanged. The `method` field already propagates into fetched URL records.
 
-**Step 4: Run to confirm pass.**
+**Step 4: Update pre-existing tests that use short mock bodies**
+
+The new threshold (200 chars) breaks pre-existing tests in `tests/test_fetch_and_clean.py` that use bodies like `"content"` (7 chars) and `"archived content"` (16 chars). Those would now fall through to the next fetcher, not return the expected `"jina"` / `"wayback"` method.
+
+Update the existing mocks to use bodies above the threshold. Specifically:
+
+```diff
+-def test_fetch_url_uses_jina_first():
+-    from fetch_and_clean import fetch_url
+-    with patch("fetch_and_clean.fetch_via_jina", return_value=("content", "title")) as mock_jina:
+-        content, title, method = fetch_url("https://example.com")
+-    assert method == "jina"
+-    mock_jina.assert_called_once()
++def test_fetch_url_uses_jina_first():
++    from fetch_and_clean import fetch_url
++    long_body = "Real Jina content. " * 20  # 380 chars — above MIN_USEFUL_CONTENT_CHARS
++    with patch("fetch_and_clean.fetch_via_jina", return_value=(long_body, "title")) as mock_jina:
++        content, title, method = fetch_url("https://example.com")
++    assert method == "jina"
++    mock_jina.assert_called_once()
+
+
+-def test_fetch_url_falls_back_to_wayback_when_jina_fails():
+-    from fetch_and_clean import fetch_url
+-    with patch("fetch_and_clean.fetch_via_jina", side_effect=Exception("timeout")):
+-        with patch("fetch_and_clean.fetch_via_wayback", return_value=("archived content", "archived title")) as mock_wb:
+-            content, title, method = fetch_url("https://example.com")
+-    assert method == "wayback"
+-    assert content == "archived content"
++def test_fetch_url_falls_back_to_wayback_when_jina_fails():
++    from fetch_and_clean import fetch_url
++    long_archived = "Archived content from the Wayback Machine. " * 10  # 430 chars
++    with patch("fetch_and_clean.fetch_via_jina", side_effect=Exception("timeout")):
++        with patch("fetch_and_clean.fetch_via_wayback", return_value=(long_archived, "archived title")) as mock_wb:
++            content, title, method = fetch_url("https://example.com")
++    assert method == "wayback"
++    assert content == long_archived
+```
+
+The `test_fetch_url_raises_when_both_fail` test (current line 143) does not need updating — it mocks both fetchers to raise, which still works.
+
+**Step 5: Run to confirm pass**
 
 Run: `pytest tests/test_fetch_and_clean.py -v`
-Expected: all tests pass. Existing tests that mock Jina to return real content still hit the `len(content) >= MIN_USEFUL_CONTENT_CHARS` branch and return `"jina"` exactly as before.
+Expected: all tests pass (including the updated pre-existing ones and the three new threshold tests).
 
-**Step 5: Commit.**
+**Step 6: Commit.**
 
 ---
 
