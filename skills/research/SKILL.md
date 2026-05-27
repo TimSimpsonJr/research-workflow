@@ -166,9 +166,11 @@ Generate a run ID from the current date and a slugified version of the user's in
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from state import create_run
+from state import create_run, update_stage
 from pathlib import Path
-r = create_run(Path('STATE_DIR'), 'RUN_ID', 'TIER')
+state_dir = Path('STATE_DIR')
+r = create_run(state_dir, 'RUN_ID', 'TIER')
+update_stage(state_dir, 'triage')
 print(json.dumps(r))
 "
 ```
@@ -260,7 +262,7 @@ Researching {project} at depth {topic.depth}, ~{estimated_minutes}min. Proceed? 
 ```
 
 - `yes`: initialize topics from the resolver response (see snippet below), then skip to Stage 4 (hop loop). Stage 3 is bypassed. Strategy was already persisted in 2c.
-- `edit`: upgrade to `unified` strategy -- present the full plan as in Stage 3d below. The run is already created; Stage 3 will populate topics and approve. Also overwrite `run['strategy'] = 'unified'` since the user chose to upgrade.
+- `edit`: upgrade to `unified` strategy -- present the full plan as in Stage 3a below. The run is already created; Stage 3 will populate topics and approve. Also overwrite `run['strategy'] = 'unified'` since the user chose to upgrade.
 - `cancel`: call `abandon_run(STATE_DIR)` and stop.
 
 When `yes`: initialize topics now (since Stage 3 is being skipped):
@@ -284,7 +286,17 @@ Note: strategy persistence now happens once in Stage 2c (immediately after the r
 
 ## Stage 3: Resolve
 
-Stage 3 runs ONLY for `unified` strategy. The run was already created in Stage 2a and the resolver already dispatched in Stage 2b -- here we just present the plan and save the approval.
+Stage 3 runs ONLY for `unified` strategy. The run was already created in Stage 2a and the resolver already dispatched in Stage 2b -- here we just present the plan and save the approval. Transition stage first:
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import update_stage
+from pathlib import Path
+update_stage(Path('STATE_DIR'), 'resolve')
+"
+```
 
 ### 3a. Present plan for approval
 
@@ -671,6 +683,18 @@ save_state(Path('STATE_DIR'), run)
 
 ## Stage 6: Classify
 
+Transition stage first:
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import update_stage
+from pathlib import Path
+update_stage(Path('STATE_DIR'), 'classify')
+"
+```
+
 ### 6a. Aggregate per-hop summaries
 
 Before dispatching the classify agent, aggregate all per-hop summary files into a single `summaries.json`:
@@ -899,11 +923,21 @@ After all notes are written:
 
 ---
 
-## Stage 8d: Wikilink Scan
+## Stage 8: Wikilink Scan
 
-After all notes and MOCs are written, scan for wikilink opportunities between the new notes and existing project notes.
+After all notes and MOCs are written, scan for wikilink opportunities between the new notes and existing project notes. Transition stage first:
 
-### 8d-i. Refresh vault index
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import update_stage
+from pathlib import Path
+update_stage(Path('STATE_DIR'), 'wikilink_scan')
+"
+```
+
+### 8a. Refresh vault index
 
 ```bash
 python -c "
@@ -918,11 +952,11 @@ print(json.dumps(stats))
 
 This ensures the newly written notes are indexed before the scanner queries the vault.
 
-### 8d-ii. Determine project folder
+### 8b. Determine project folder
 
 From the written notes list, extract the common parent folder. For example, if notes were written to `Projects/Activism/BJU/Bob Jones University.md` and `Projects/Activism/BJU/GRACE Report on Bob Jones University.md`, the project folder is `Projects/Activism/BJU`.
 
-### 8d-iii. Dispatch wikilink-scanner agent
+### 8c. Dispatch wikilink-scanner agent
 
 Read the agent definition: `REPO/agents/wikilink-scanner.md`
 
@@ -952,7 +986,7 @@ Dispatch via the Task tool:
 }
 ```
 
-### 8d-iv. Parse and apply edits
+### 8d. Parse and apply edits
 
 The agent returns a JSON object with `edits` and `stats`.
 
@@ -962,7 +996,7 @@ For each edit in the `edits` array:
 3. Replace it with `edit.replace` using the Edit tool
 4. If the `find` text is not found (perhaps already wikilinked or content changed), skip it and log a warning
 
-### 8d-v. Report results
+### 8e. Report results
 
 Log the results:
 ```
@@ -973,7 +1007,7 @@ Wikilink scan: {stats.total_edits} edits applied
 
 If no edits were needed, log: `Wikilink scan: no new wikilinks needed.`
 
-### 8d-vi. Update state
+### 8f. Update state
 
 ```bash
 python -c "
@@ -987,7 +1021,7 @@ update_stage(Path('STATE_DIR'), 'discover')
 
 ---
 
-## Stage 9: Discover
+## Stage 9: Discover Threads
 
 ### 9a. Dispatch thread-discoverer agent
 
@@ -1187,7 +1221,12 @@ Throughout the pipeline, follow these principles:
 
 When resuming a run (Stage 1 detected an active run and the user chose "Resume"):
 
-1. Read `current_run.json` to find the current `stage`.
-2. Load any saved stage outputs (`research_plan.json`, `search_context.json`, `fetch_results.json`, `summaries.json`, `classification.json`, `written_notes.json`) from `STATE_DIR/`.
-3. Skip to the recorded stage. For the `write` stage specifically, check `written_notes.json` to determine which notes are already complete and skip them.
+1. Read `current_run.json` to find the current `stage` -- one of `triage`, `resolve`, `hop_loop`, `quality_gate`, `classify`, `write`, `wikilink_scan`, `discover`, `complete`.
+2. Load any saved stage outputs from `STATE_DIR/`:
+   - `research_plan.json` (from Stage 3)
+   - `search_context_hop{N}.json` and `fetch_results_hop{N}.json` (per-hop, from Stage 4)
+   - `summaries_hop{N}.json` (per-hop, from Stage 4d) and aggregated `summaries.json` (from Stage 6a)
+   - `classification.json` (from Stage 6d)
+   - `written_notes.json` (from Stage 7)
+3. Skip to the recorded stage. For the `hop_loop` stage, the topics' `current_hop` and `status` fields determine which active topics still need processing -- only un-completed topics dispatch through Stage 4 again. For the `write` stage specifically, check `written_notes.json` to determine which notes are already complete and skip them.
 4. Continue the pipeline from that point.
