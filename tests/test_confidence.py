@@ -2,6 +2,7 @@
 from confidence import (
     DEPTH_PROFILES,
     get_depth_profile,
+    primary_source_presence,
     tier_diversity_weight,
     topic_coverage,
 )
@@ -66,3 +67,23 @@ def test_topic_coverage_low_tier_excluded():
 def test_topic_coverage_mixed():
     sources = [{"tier": "T1"}, {"tier": "T3"}, {"tier": "T2"}, {"tier": "T4"}]
     assert topic_coverage(sources) == 2 / 3
+
+
+def test_primary_source_presence_zero():
+    sources = [{"is_primary": False}, {"is_primary": False}]
+    assert primary_source_presence(sources) == 0.0
+
+
+def test_primary_source_presence_one():
+    sources = [{"is_primary": True}, {"is_primary": False}]
+    assert primary_source_presence(sources) == 0.5
+
+
+def test_primary_source_presence_two():
+    sources = [{"is_primary": True}, {"is_primary": True}]
+    assert primary_source_presence(sources) == 1.0
+
+
+def test_primary_source_presence_caps_at_two():
+    sources = [{"is_primary": True}] * 5
+    assert primary_source_presence(sources) == 1.0

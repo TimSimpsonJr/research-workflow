@@ -32,3 +32,9 @@ def topic_coverage(sources: list[dict]) -> float:
     """Fraction of T2+ sources up to a count of 3. Caps at 1.0."""
     t2plus = sum(1 for s in sources if s["tier"] in {"T1", "T2"})
     return min(1.0, t2plus / 3)
+
+
+def primary_source_presence(sources: list[dict]) -> float:
+    """Capped at 1.0 when 2+ primary sources present."""
+    primary_count = sum(1 for s in sources if s.get("is_primary"))
+    return min(1.0, primary_count / 2)
