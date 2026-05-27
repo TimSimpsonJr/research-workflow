@@ -41,3 +41,32 @@ def test_compute_run_outcome_loss_contradiction_spike():
         "outcomes": {"user_decisions": []},
     }
     assert compute_run_outcome(case, confidence_target=0.75) == "L"
+
+
+def test_apply_score_increments_wins():
+    from score_updates import apply_score
+    from learned_patterns import LearnedPattern
+    p = LearnedPattern(id="p1", name="", body="", domain_tags=[],
+                       target_stage="search", wins=2, losses=1)
+    apply_score(p, "W")
+    assert p.wins == 3 and p.losses == 1
+
+
+def test_apply_score_increments_losses():
+    from score_updates import apply_score
+    from learned_patterns import LearnedPattern
+    p = LearnedPattern(id="p1", name="", body="", domain_tags=[],
+                       target_stage="search", wins=2, losses=1)
+    apply_score(p, "L")
+    assert p.wins == 2 and p.losses == 2
+
+
+def test_apply_score_rejects_unknown_outcome():
+    import pytest
+    from score_updates import apply_score
+    from learned_patterns import LearnedPattern
+    p = LearnedPattern(id="p1", name="", body="", domain_tags=[],
+                       target_stage="search", wins=2, losses=1)
+    with pytest.raises(ValueError):
+        apply_score(p, "X")
+    assert p.wins == 2 and p.losses == 1

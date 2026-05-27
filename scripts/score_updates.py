@@ -34,3 +34,13 @@ def compute_run_outcome(case: dict, *, confidence_target: float = 0.75) -> str:
         if d.get("choice") == "abandon":
             return "L"
     return "W"
+
+
+def apply_score(pattern: LearnedPattern, outcome: str) -> None:
+    """Increment wins or losses on a LearnedPattern in place."""
+    if outcome == "W":
+        pattern.wins += 1
+    elif outcome == "L":
+        pattern.losses += 1
+    else:
+        raise ValueError(f"outcome must be 'W' or 'L', got {outcome!r}")
