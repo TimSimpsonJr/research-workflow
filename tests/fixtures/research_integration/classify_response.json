@@ -3,15 +3,22 @@
   "notes_to_create": [
     {
       "title": "Flock Safety ALPR Overview",
+      "filename": "Flock Safety ALPR Overview.md",
       "folder": "Projects/Surveillance",
-      "tags": ["research", "surveillance", "alpr"],
-      "linked_notes": [],
+      "action": "create",
+      "type": "general_research",
+      "write_model": "sonnet",
+      "content_summary": "Flock Safety operates a nationwide ALPR network. Coverage spans 4,000+ communities with a 30-day default retention window; civil liberties concerns center on data sharing and oversight.",
       "source_urls": [
         "https://www.eff.org/deeplinks/flock-safety-alpr-report",
         "https://flocksafety.com/transparency",
         "https://www.brookings.edu/articles/alpr-policy-tradeoffs"
       ],
-      "summary_seed": "Flock Safety operates a nationwide ALPR network. Coverage spans 4,000+ communities with a 30-day default retention window; civil liberties concerns center on data sharing and oversight."
+      "tags": ["research", "surveillance", "alpr"],
+      "links": ["[[ALPR Overview]]"],
+      "stub_links": ["[[Flock Safety Transparency Portal]]"],
+      "media": [],
+      "priority": "primary"
     }
   ],
   "vault_context": {
