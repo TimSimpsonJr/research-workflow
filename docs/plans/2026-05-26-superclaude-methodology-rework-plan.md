@@ -1041,10 +1041,15 @@ def test_create_run_topic_initialization(tmp_path):
         "contradiction_rate": 0.0,
         "seen_urls": [],
         "replan_hint": None,
+        "next_hop": None,
     }
 ```
 
-The `replan_hint` field carries the hop-planner's suggested course-correction (pattern + focus entity + query focus) when it returns `decision: "replan"`. Stage 5b reads it back when constructing the auto-replan dispatch. `None` when no replan has been requested.
+Two pieces of forward-looking state on each topic:
+- `next_hop`: the hop-planner's `next_hop` payload (pattern + from + rationale) when it returned `decision: "continue"`. Stage 4a reads this on hop 2+ to construct the search-agent's hop_context. `None` at start and after `decision: "stop"`.
+- `replan_hint`: the hop-planner's `replan_hint` payload when it returned `decision: "replan"`, OR a synthesized hint from Stage 5b/5c. Stage 4a reads this on a re-admitted topic. `None` when no replan is pending.
+
+The two are mutually exclusive in practice: continue → `next_hop` set, `replan_hint` cleared; replan → `replan_hint` set, `next_hop` cleared.
 
 **Step 2: Run to confirm failure.**
 
@@ -1071,6 +1076,7 @@ def init_topic(topic: str, mode: str, depth: str) -> dict:
         "contradiction_rate": 0.0,
         "seen_urls": [],
         "replan_hint": None,
+        "next_hop": None,
     }
 ```
 
@@ -1246,6 +1252,24 @@ def set_replan_hint(state_dir: Path, topic_name: str, hint: dict | None) -> None
     for t in run["topics"]:
         if t["topic"] == topic_name:
             t["replan_hint"] = hint
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def set_next_hop(state_dir: Path, topic_name: str, next_hop: dict | None) -> None:
+    """Set or clear the topic's next_hop (read by Stage 4a on the next iteration).
+
+    Called after a hop-planner decision="continue" to record the pattern/from/rationale
+    that should drive the next search. Cleared after consumption in Stage 4a.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["next_hop"] = next_hop
             break
     else:
         raise KeyError(f"Topic not found: {topic_name}")
@@ -3066,10 +3090,12 @@ For each active topic, choose hop_context based on how the topic got admitted at
 
 - **Hop 1 (fresh topic):** dispatch search-agent normally with `topic`, `existing_urls`, `depth`. No hop_context preamble.
 
-- **Hop 2+ following a hop-planner `continue` decision:** the prior hop-planner returned `next_hop` with a pattern and "from" entity. Use those:
-  - `pattern`: prior hop-planner's `next_hop.pattern`
-  - `from`: prior hop-planner's `next_hop.from`
+- **Hop 2+ following a hop-planner `continue` decision:** the prior hop-planner returned `next_hop`, which Stage 4e persisted to `topic.next_hop`. Read it from state:
+  - `pattern`: `topic.next_hop.pattern`
+  - `from`: `topic.next_hop.from`
   - `seen_urls`: the topic's seen_urls list
+
+  After dispatching the search, call `set_next_hop(topic, None)` to clear the consumed direction (the upcoming hop-planner response will set a new one if continuing).
 
 - **Hop following a quality-gate replan (Stage 5b or 5c re-admission):** the topic has a stored `replan_hint` instead of a prior `next_hop`. Use the hint's fields:
   - `pattern`: `topic.replan_hint.suggested_pattern`
@@ -3132,13 +3158,26 @@ vault_index_path: {VAULT}/.research-workflow/vault.db
 scripts_dir: SCRIPTS
 ```
 
-Parse each hop-planner response:
+Parse each hop-planner response. All three branches first call `record_hop()` to persist what just happened, then differ in what they persist for the future:
 
-- `decision == "continue"`: call `record_hop()` with hop_data including this hop's pattern (from prior hop-planner) and stats. Clear any stale replan_hint via `set_replan_hint(topic, None)`. Topic stays active for next hop level.
-- `decision == "stop"`: call `record_hop()` once, then `mark_topic_status(topic, "complete")`.
-- `decision == "replan"`: call `set_replan_hint(topic, response.replan_hint)` to persist the hint, then `mark_topic_status(topic, "replan_pending")`. The quality gate (Stage 5) will read the hint back.
+- `decision == "continue"`:
+  - `record_hop(topic, hop_data)` — persists the just-completed hop into genealogy and increments current_hop.
+  - `set_next_hop(topic, response.next_hop)` — persists the planner's chosen pattern/from for Stage 4a to read on the next iteration.
+  - `set_replan_hint(topic, None)` — clears any stale hint from a prior aborted replan.
+  - Topic stays `active` for the next hop level.
 
-For early-termination cases (Stage 4a returned zero sources after one alternate pattern attempt), the hop-planner can also return `decision: "stop"` with `status: "early_terminated"` — call `mark_topic_status(topic, "early_terminated")`.
+- `decision == "stop"`:
+  - `record_hop(topic, hop_data)` — persists the just-completed hop.
+  - `set_next_hop(topic, None)` — no future hop.
+  - `mark_topic_status(topic, "complete")`.
+
+- `decision == "replan"`:
+  - `record_hop(topic, hop_data)` — still persists the just-completed hop. The replan path doesn't discard history.
+  - `set_next_hop(topic, None)` — the future direction comes from the replan_hint, not next_hop.
+  - `set_replan_hint(topic, response.replan_hint)` — persists the planner's diagnosis for Stage 5 to read.
+  - `mark_topic_status(topic, "replan_pending")`. The quality gate (Stage 5) handles re-admission.
+
+For early-termination cases (Stage 4a returned zero sources after one alternate pattern attempt), the hop-planner can also return `decision: "stop"` with `status: "early_terminated"` — same as `stop` above, but call `mark_topic_status(topic, "early_terminated")` instead of `"complete"`.
 
 ### 4f. Persist hop-planner's quality signals
 
