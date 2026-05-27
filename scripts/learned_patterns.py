@@ -200,3 +200,42 @@ def _parse_learned_patterns(text: str) -> LearnedPatternsFile:
 
     _flush()
     return LearnedPatternsFile(version=version, patterns=patterns)
+
+
+def filter_by_topic_text(
+    file: LearnedPatternsFile,
+    *,
+    topics: list[str],
+) -> list[LearnedPattern]:
+    """Return patterns whose domain_tags appear as case-insensitive substrings
+    in the joined topic text. Used at Stage 2 when formal domain_tags don't
+    exist yet (v3.0.0 derives domain_tags only at case-write time from
+    written-note tags). Conservative on false positives — token-substring
+    only; no stemming or fuzzy matching."""
+    if not topics:
+        return []
+    joined = " ".join(topics).lower()
+    return [
+        p for p in file.patterns
+        if any(tag.lower() in joined for tag in p.domain_tags)
+    ]
+
+
+def filter_relevant(
+    file: LearnedPatternsFile,
+    *,
+    run_domain_tags: list[str],
+) -> list[LearnedPattern]:
+    """Return patterns whose domain_tags overlap with run_domain_tags.
+    Used at Stage 10d when the case has its derived domain_tags available."""
+    run_set = set(run_domain_tags)
+    return [p for p in file.patterns if run_set & set(p.domain_tags)]
+
+
+def group_by_stage(patterns: list[LearnedPattern]) -> dict[str, list[LearnedPattern]]:
+    """Group patterns into a dict keyed by target_stage.
+    All three known stages are present in the returned dict (empty lists if no patterns)."""
+    out: dict[str, list[LearnedPattern]] = {"search": [], "hop_planner": [], "classify": []}
+    for p in patterns:
+        out.setdefault(p.target_stage, []).append(p)
+    return out

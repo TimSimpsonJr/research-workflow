@@ -123,3 +123,62 @@ def test_load_invalid_utf8_returns_empty_with_warning(tmp_path):
     assert loaded.patterns == []
     assert len(warnings) == 1
     assert "learned_patterns_corrupted" in warnings[0]
+
+
+def test_filter_by_topic_text_substring_match():
+    """filter_by_topic_text matches patterns whose domain_tags appear as
+    case-insensitive substrings in the joined topic text. Used at Stage 2
+    where formal domain_tags don't yet exist."""
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, filter_by_topic_text
+    f = LearnedPatternsFile(patterns=[
+        LearnedPattern(id="a", name="A", body="", domain_tags=["civic", "alpr"],
+                       target_stage="search"),
+        LearnedPattern(id="b", name="B", body="", domain_tags=["tech"],
+                       target_stage="search"),
+        LearnedPattern(id="c", name="C", body="", domain_tags=["civic"],
+                       target_stage="hop_planner"),
+    ])
+    # "civic" appears in topic text -> matches a (tagged civic/alpr) and c (tagged civic).
+    # b (tagged only "tech") does NOT match — "tech" not in topic text.
+    relevant = filter_by_topic_text(f, topics=["civic ALPR programs in Greenville"])
+    assert {p.id for p in relevant} == {"a", "c"}
+
+
+def test_filter_by_topic_text_case_insensitive():
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, filter_by_topic_text
+    f = LearnedPatternsFile(patterns=[
+        LearnedPattern(id="a", name="A", body="", domain_tags=["Civic"],
+                       target_stage="search"),
+    ])
+    relevant = filter_by_topic_text(f, topics=["alpr in CIVIC contexts"])
+    assert len(relevant) == 1
+
+
+def test_filter_by_domain_overlap():
+    """filter_relevant matches by exact domain_tags overlap. Used at Stage 10d
+    when the case has its derived domain_tags available."""
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, filter_relevant
+    f = LearnedPatternsFile(patterns=[
+        LearnedPattern(id="a", name="A", body="", domain_tags=["civic", "alpr"],
+                       target_stage="search"),
+        LearnedPattern(id="b", name="B", body="", domain_tags=["tech"],
+                       target_stage="search"),
+        LearnedPattern(id="c", name="C", body="", domain_tags=["civic"],
+                       target_stage="hop_planner"),
+    ])
+    relevant = filter_relevant(f, run_domain_tags=["civic"])
+    assert {p.id for p in relevant} == {"a", "c"}
+
+
+def test_group_by_target_stage():
+    """group_by_stage returns dict[stage -> list[LearnedPattern]]."""
+    from learned_patterns import LearnedPattern, group_by_stage
+    patterns = [
+        LearnedPattern(id="a", name="A", body="", domain_tags=["x"], target_stage="search"),
+        LearnedPattern(id="b", name="B", body="", domain_tags=["x"], target_stage="hop_planner"),
+        LearnedPattern(id="c", name="C", body="", domain_tags=["x"], target_stage="search"),
+    ]
+    grouped = group_by_stage(patterns)
+    assert {p.id for p in grouped["search"]} == {"a", "c"}
+    assert {p.id for p in grouped["hop_planner"]} == {"b"}
+    assert grouped.get("classify", []) == []
