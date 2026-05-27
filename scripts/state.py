@@ -37,7 +37,7 @@ def write_shared_state_atomically(target: Path, content: dict | str) -> None:
     """
     target.parent.mkdir(parents=True, exist_ok=True)
     if isinstance(content, dict):
-        body = json.dumps(content, indent=2)
+        body = json.dumps(content, indent=2, ensure_ascii=False)
     elif isinstance(content, str):
         body = content
     else:

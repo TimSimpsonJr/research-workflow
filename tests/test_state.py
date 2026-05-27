@@ -639,3 +639,21 @@ def test_write_shared_state_atomically_creates_parent(tmp_path):
     target = tmp_path / "nested" / "deeper" / "file.json"
     write_shared_state_atomically(target, {"x": 1})
     assert target.exists()
+
+
+def test_write_shared_state_atomically_preserves_unicode(tmp_path):
+    """Unicode characters survive without being escaped to \\uXXXX."""
+    from state import write_shared_state_atomically
+    import json
+    target = tmp_path / "accumulator.json"
+    payload = {
+        "name": "T1 sources dominate — civic ALPR",
+        "note": "Smart “quotes” round-trip cleanly"
+    }
+    write_shared_state_atomically(target, payload)
+    raw = target.read_text(encoding="utf-8")
+    # Body should contain the literal Unicode characters, not escaped \uXXXX sequences
+    assert "—" in raw, f"em-dash should be literal, got: {raw}"
+    assert "“" in raw, f"smart quote should be literal, got: {raw}"
+    # Round-trip is also fine
+    assert json.loads(raw) == payload
