@@ -417,3 +417,16 @@ def is_stale_run(state_dir: Path, max_age_hours: int = 24) -> bool:
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     return datetime.now(timezone.utc) - started > timedelta(hours=max_age_hours)
+
+
+def write_case_record(cases_dir: Path, case_data: dict) -> None:
+    """Write a case record JSON to cases_dir/{case_id}.json.
+
+    Stage A (case prep) writes case records at completion. Stage B will read
+    them later for retrospective analysis; nothing reads them yet. Creates
+    the cases directory if it doesn't exist.
+    """
+    cases_dir.mkdir(parents=True, exist_ok=True)
+    case_id = case_data["case_id"]
+    case_file = cases_dir / f"{case_id}.json"
+    case_file.write_text(json.dumps(case_data, indent=2), encoding="utf-8", newline="\n")

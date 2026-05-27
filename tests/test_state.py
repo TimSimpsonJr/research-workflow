@@ -409,3 +409,21 @@ def test_complete_run_returns_run_data(tmp_path):
     assert "completed_at" in result
     # The file is gone (archived)
     assert not (tmp_path / "current_run.json").exists()
+
+
+def test_write_case_record(tmp_path):
+    from state import write_case_record
+    case_data = {
+        "case_id": "2026-05-26-test",
+        "version": 1,
+        "query": "test research",
+        "domain_tags": ["test"],
+        "outcomes": {"sources_processed": 5},
+    }
+    # cases_dir is .research-workflow/cases under the vault root
+    cases_dir = tmp_path / "cases"
+    write_case_record(cases_dir, case_data)
+
+    case_file = cases_dir / "2026-05-26-test.json"
+    assert case_file.exists()
+    assert json.loads(case_file.read_text()) == case_data
