@@ -395,13 +395,17 @@ def abandon_run(state_dir: Path) -> None:
     _archive_run(state_dir)
 
 
-def complete_run(state_dir: Path) -> None:
-    """Archive completed run to history."""
+def complete_run(state_dir: Path) -> dict | None:
+    """Archive completed run to history. Returns the final run dict (with
+    completed_at) before archiving so Stage 10 callers can read telemetry,
+    hop genealogy, and case-record data from the in-memory snapshot without
+    having to re-load from history/."""
     run = load_run(state_dir)
     if run:
         run["completed_at"] = datetime.now(timezone.utc).isoformat()
         _atomic_write(state_dir / CURRENT_RUN_FILE, run)
     _archive_run(state_dir)
+    return run
 
 
 def is_stale_run(state_dir: Path, max_age_hours: int = 24) -> bool:

@@ -396,3 +396,16 @@ def test_abandon_run_sweeps_hop_intermediate_files(tmp_path):
     assert (history_dir / "search_context_hop1.json").exists()
     # Active run file should be gone
     assert not (tmp_path / "current_run.json").exists()
+
+
+def test_complete_run_returns_run_data(tmp_path):
+    from state import create_run, complete_run
+    create_run(tmp_path, run_id="2026-05-26-complete-test", tier="full")
+
+    result = complete_run(tmp_path)
+
+    assert result is not None
+    assert result["run_id"] == "2026-05-26-complete-test"
+    assert "completed_at" in result
+    # The file is gone (archived)
+    assert not (tmp_path / "current_run.json").exists()
