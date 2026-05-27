@@ -1200,7 +1200,7 @@ def test_bump_max_hops(tmp_path):
 
 
 def test_apply_hop_decision_continue_is_atomic(tmp_path):
-    """apply_hop_decision applies record_hop + set_next_hop + clear replan_hint in one save."""
+    """apply_hop_decision applies hop record + routing + quality signals + status in one save."""
     from state import create_run, init_topic, save_state, apply_hop_decision, load_run
     run = create_run(tmp_path, run_id="r1", tier="full")
     topic = init_topic("X", mode="web_research", depth="standard")
@@ -1212,11 +1212,14 @@ def test_apply_hop_decision_continue_is_atomic(tmp_path):
                 "ended_at": "2026-05-26T15:00:00Z"}
     next_hop = {"pattern": "entity_expansion", "from": "Flock Safety", "rationale": "..."}
     apply_hop_decision(tmp_path, topic_name="X", hop_data=hop_data,
-                       decision="continue", next_hop=next_hop)
+                       decision="continue", confidence_score=0.68,
+                       contradiction_rate=0.12, next_hop=next_hop)
 
     t = load_run(tmp_path)["topics"][0]
     assert t["hop_genealogy"] == [hop_data]
     assert t["current_hop"] == 1
+    assert t["confidence_history"] == [0.68]
+    assert t["contradiction_rate"] == 0.12
     assert t["next_hop"] == next_hop
     assert t["replan_hint"] is None  # cleared atomically
     assert t["status"] == "active"
@@ -1230,10 +1233,13 @@ def test_apply_hop_decision_stop_marks_complete(tmp_path):
 
     apply_hop_decision(tmp_path, topic_name="X",
                        hop_data={"hop": 1, "ended_at": "..."},
-                       decision="stop")
+                       decision="stop", confidence_score=0.82,
+                       contradiction_rate=0.05)
 
     t = load_run(tmp_path)["topics"][0]
     assert t["current_hop"] == 1
+    assert t["confidence_history"] == [0.82]
+    assert t["contradiction_rate"] == 0.05
     assert t["next_hop"] is None
     assert t["status"] == "complete"
 
@@ -1248,10 +1254,13 @@ def test_apply_hop_decision_replan_stores_hint(tmp_path):
             "suggested_query_focus": "official data"}
     apply_hop_decision(tmp_path, topic_name="X",
                        hop_data={"hop": 1, "ended_at": "..."},
-                       decision="replan", replan_hint=hint)
+                       decision="replan", confidence_score=0.41,
+                       contradiction_rate=0.38, replan_hint=hint)
 
     t = load_run(tmp_path)["topics"][0]
     assert t["current_hop"] == 1
+    assert t["confidence_history"] == [0.41]
+    assert t["contradiction_rate"] == 0.38
     assert t["next_hop"] is None
     assert t["replan_hint"] == hint
     assert t["status"] == "replan_pending"
@@ -1267,7 +1276,8 @@ def test_apply_hop_decision_unknown_raises(tmp_path):
     with pytest.raises(ValueError, match="Unknown decision"):
         apply_hop_decision(tmp_path, topic_name="X",
                            hop_data={"hop": 1},
-                           decision="bogus")
+                           decision="bogus",
+                           confidence_score=0.0, contradiction_rate=0.0)
 ```
 
 **Step 2: Run to confirm failure.**
@@ -1368,29 +1378,36 @@ def apply_hop_decision(
     topic_name: str,
     hop_data: dict,
     decision: str,
+    confidence_score: float,
+    contradiction_rate: float,
     next_hop: dict | None = None,
     replan_hint: dict | None = None,
 ) -> None:
     """Atomically apply the full state transition for one hop-planner decision.
 
     Combines record_hop + set_next_hop + set_replan_hint + mark_topic_status
-    into a single load -> mutate -> save cycle so a crash mid-transition
-    cannot leave the topic with partial state (e.g., hop recorded but status
-    still 'active', or next_hop stale relative to the just-completed hop).
+    + append_confidence + set_contradiction_rate into a single
+    load -> mutate -> save cycle so a crash mid-transition cannot leave the
+    topic with partial state — e.g., hop recorded but quality signals stale,
+    or status updated but next_hop relative to the just-completed hop.
 
     `decision` is one of: "continue", "stop", "early_terminated", "replan".
 
     Stage 4e of the orchestrator should always call this rather than the
-    per-field setters when applying a hop-planner response.
+    per-field setters when applying a hop-planner response. The quality
+    signals (confidence_score, contradiction_rate) come directly from the
+    hop-planner JSON and are required arguments.
     """
     run = load_run(state_dir)
     if run is None:
         raise RuntimeError("No active run")
     for t in run["topics"]:
         if t["topic"] == topic_name:
-            # Always: record the hop and advance current_hop
+            # Always: record the hop, advance current_hop, persist quality signals
             t["hop_genealogy"].append(hop_data)
             t["current_hop"] += 1
+            t["confidence_history"].append(confidence_score)
+            t["contradiction_rate"] = contradiction_rate
             # Decision-specific transitions
             if decision == "continue":
                 t["next_hop"] = next_hop
@@ -1414,7 +1431,7 @@ def apply_hop_decision(
     save_state(state_dir, run)
 ```
 
-The individual helpers (`record_hop`, `set_next_hop`, `set_replan_hint`, `mark_topic_status`) remain useful for the Stage 5 quality-gate flows where transitions happen piecemeal across multiple stages. `apply_hop_decision` is specifically for Stage 4e where the four mutations form one logical atomic transition.
+The individual helpers (`record_hop`, `set_next_hop`, `set_replan_hint`, `mark_topic_status`, `append_confidence`, `set_contradiction_rate`) remain useful for the Stage 5 quality-gate flows where transitions happen piecemeal across multiple stages. `apply_hop_decision` is specifically for Stage 4e where ALL the mutations from one hop-planner response form one logical atomic transition.
 
 **Step 4: Run to confirm pass.**
 
@@ -3284,7 +3301,7 @@ vault_index_path: {VAULT}/.research-workflow/vault.db
 scripts_dir: SCRIPTS
 ```
 
-Parse each hop-planner response. **Apply the full transition atomically via `apply_hop_decision()`** — never via the per-field setters in this stage. This ensures a crash partway through the transition cannot leave a topic with hop recorded but status / routing fields stale.
+Parse each hop-planner response. **Apply the full transition atomically via `apply_hop_decision()`** — never via the per-field setters in this stage. The atomic helper persists genealogy + current_hop + confidence_history + contradiction_rate + next_hop / replan_hint / status in a single load → mutate → save cycle, so a crash partway through the transition cannot leave a topic with mismatched state (hop recorded but quality signals stale, status updated but routing stale, etc.).
 
 ```bash
 python -c "
@@ -3304,39 +3321,24 @@ apply_hop_decision(
     topic_name='TOPIC',
     hop_data=HOP_DATA,
     decision=decision,
+    confidence_score=HOP_PLANNER_RESPONSE['confidence_score'],
+    contradiction_rate=HOP_PLANNER_RESPONSE['contradiction_rate'],
     next_hop=HOP_PLANNER_RESPONSE.get('next_hop'),       # used only when decision='continue'
     replan_hint=HOP_PLANNER_RESPONSE.get('replan_hint'), # used only when decision='replan'
 )
 "
 ```
 
-What each decision atomically does:
+What each decision atomically does (all three branches always persist confidence + contradiction_rate from the hop-planner response, in addition to the branch-specific writes):
 
-- `continue`: appends `hop_data` to genealogy, increments `current_hop`, sets `next_hop` to the planner's pick, clears `replan_hint`, leaves status `active`.
-- `stop`: appends `hop_data`, increments `current_hop`, clears `next_hop`, sets status `complete`.
+- `continue`: appends `hop_data` to genealogy, increments `current_hop`, appends `confidence_score` to history, overwrites `contradiction_rate`, sets `next_hop` to the planner's pick, clears `replan_hint`, leaves status `active`.
+- `stop`: appends `hop_data`, increments `current_hop`, appends `confidence_score`, overwrites `contradiction_rate`, clears `next_hop`, sets status `complete`.
 - `early_terminated` (orchestrator-substituted when Stage 4a's alternate-pattern attempt produced zero usable sources): same as `stop` but sets status `early_terminated`.
-- `replan`: appends `hop_data`, increments `current_hop`, clears `next_hop`, sets `replan_hint` to the planner's diagnosis, sets status `replan_pending`. Stage 5 handles re-admission.
+- `replan`: appends `hop_data`, increments `current_hop`, appends `confidence_score`, overwrites `contradiction_rate`, clears `next_hop`, sets `replan_hint` to the planner's diagnosis, sets status `replan_pending`. Stage 5 handles re-admission.
 
-### 4f. Persist hop-planner's quality signals
+Stage 4f no longer exists — quality signals are now part of the atomic 4e transition.
 
-After each hop-planner response, persist BOTH the confidence score (append to history) and the contradiction rate (overwrite latest):
-
-```bash
-python -c "
-import sys
-sys.path.insert(0, 'SCRIPTS')
-from state import append_confidence, set_contradiction_rate
-from pathlib import Path
-append_confidence(Path('STATE_DIR'), topic_name='TOPIC',
-                  score=HOP_PLANNER_RESPONSE.confidence_score)
-set_contradiction_rate(Path('STATE_DIR'), topic_name='TOPIC',
-                       rate=HOP_PLANNER_RESPONSE.contradiction_rate)
-"
-```
-
-Both signals feed the Stage 5 quality gate. Without the `set_contradiction_rate` call, `topic.contradiction_rate` stays at its `0.0` init forever and the contradiction-triggered replan branch never fires.
-
-### 4g. Stage transition
+### 4f. Stage transition
 
 When all topics have status != "active", transition to Stage 5:
 
