@@ -320,3 +320,28 @@ def test_apply_hop_decision_unknown_raises(tmp_path):
                            hop_data={"hop": 1},
                            decision="bogus",
                            confidence_score=0.0, contradiction_rate=0.0)
+
+
+def test_add_usage_starts_at_zero(tmp_path):
+    from state import create_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    assert run["usage"] == {
+        "haiku":  {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+        "sonnet": {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+        "opus":   {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+        "ollama": {"calls": 0},
+    }
+
+
+def test_add_usage_accumulates(tmp_path):
+    from state import create_run, add_usage, load_run, save_state
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    save_state(tmp_path, run)
+
+    add_usage(tmp_path, model="haiku", in_tokens=1000, out_tokens=200, stage="search")
+    add_usage(tmp_path, model="haiku", in_tokens=500,  out_tokens=100, stage="summarize")
+    add_usage(tmp_path, model="ollama", in_tokens=0, out_tokens=0, stage="summarize")
+
+    usage = load_run(tmp_path)["usage"]
+    assert usage["haiku"] == {"calls": 2, "in_tokens": 1500, "out_tokens": 300}
+    assert usage["ollama"]["calls"] == 1

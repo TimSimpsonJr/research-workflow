@@ -140,6 +140,29 @@ def bump_max_hops(state_dir: Path, topic_name: str, increment: int = 1) -> None:
     save_state(state_dir, run)
 
 
+def add_usage(state_dir: Path, model: str, in_tokens: int, out_tokens: int, stage: str) -> None:
+    """Increment per-model usage counters for the active run.
+
+    Safe against missing buckets and missing keys (the ollama bucket has no
+    token fields by design — local inference has no token cost). Uses
+    dict.get(key, 0) + rather than += so the ollama bucket doesn't KeyError.
+    Silently no-ops if there is no active run (telemetry shouldn't block
+    the pipeline).
+
+    `stage` is currently unused but kept in the signature for future
+    per-stage breakdown.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        return
+    bucket = run["usage"].setdefault(model, {"calls": 0})
+    bucket["calls"] = bucket.get("calls", 0) + 1
+    if model != "ollama":
+        bucket["in_tokens"] = bucket.get("in_tokens", 0) + in_tokens
+        bucket["out_tokens"] = bucket.get("out_tokens", 0) + out_tokens
+    save_state(state_dir, run)
+
+
 def apply_hop_decision(
     state_dir: Path,
     topic_name: str,
@@ -250,6 +273,12 @@ def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
         "stage_progress": {},
         "tier_detected": tier,
         "plan_approved": False,
+        "usage": {
+            "haiku":  {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+            "sonnet": {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+            "opus":   {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+            "ollama": {"calls": 0},
+        },
     }
     _atomic_write(run_file, run)
     return run
