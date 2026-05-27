@@ -99,3 +99,70 @@ def _avg_confidence(case: dict) -> float:
         return 0.0
     vals = [v for v in cpt.values() if isinstance(v, (int, float))]
     return sum(vals) / len(vals) if vals else 0.0
+
+
+def detect_hop_pattern_lift(
+    cases: list[dict],
+    *,
+    min_lift: float = 0.1,
+    min_cases: int = 3,
+) -> list[dict]:
+    """Detect domains where one hop pattern (entity_expansion / temporal_progression
+    / conceptual_deepening / causal_chain) consistently lifts confidence the most
+    when applied at a given hop position.
+
+    Cases must include patterns_that_worked.hop_chain and confidence_per_topic.
+    """
+    by_domain: dict[tuple, list[dict]] = defaultdict(list)
+    for case in cases:
+        key = tuple(sorted(case.get("domain_tags", [])))
+        if not key:
+            continue
+        by_domain[key].append(case)
+
+    candidates = []
+
+    for domain_tags, domain_cases in by_domain.items():
+        if len(domain_cases) < min_cases:
+            continue
+        # Count hop pattern occurrences in patterns_that_worked
+        pattern_counts: dict[str, int] = defaultdict(int)
+        for c in domain_cases:
+            chain = (c.get("patterns_that_worked", {}) or {}).get("hop_chain", []) or []
+            for p in chain:
+                pattern_counts[p] += 1
+        if not pattern_counts:
+            continue
+        # Pick the most frequent
+        winning_pattern = max(pattern_counts, key=lambda k: pattern_counts[k])
+        share = pattern_counts[winning_pattern] / sum(pattern_counts.values())
+        if share < (1 - min_lift):  # winner needs strong dominance
+            continue
+
+        domain_slug = "-".join(domain_tags)
+        name = f"{winning_pattern} preferred for {' / '.join(domain_tags)} topics"
+        body = (
+            f"The {winning_pattern} hop pattern appears in patterns_that_worked "
+            f"across {pattern_counts[winning_pattern]}/{sum(pattern_counts.values())} "
+            f"hop transitions in this domain."
+        )
+        evidence = [
+            {
+                "case_id": c.get("case_id"),
+                "signal": f"hop_chain={(c.get('patterns_that_worked', {}) or {}).get('hop_chain', [])}, "
+                          f"conf_avg={_avg_confidence(c):.2f}",
+            }
+            for c in domain_cases
+        ]
+        # stable_key is the winning hop-pattern name — recurs identically across runs
+        pid = _make_pattern_id(domain_slug, "hop-pattern-bias", winning_pattern)
+        candidates.append({
+            "pattern_id": pid,
+            "name": name,
+            "category": "hop-pattern-bias",
+            "target_stage": "hop_planner",
+            "domain_tags": list(domain_tags),
+            "proposed_promotion_body": body,
+            "evidence_rows": evidence,
+        })
+    return candidates
