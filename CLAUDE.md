@@ -24,7 +24,7 @@ A Claude Code plugin for deep research into Obsidian vaults. The `/research` ski
 
 ## Key conventions
 
-- **No anthropic SDK**: The pipeline does not import or call the Anthropic API directly. All LLM work goes through Claude Code subagents (Task tool) or Ollama.
+- **No anthropic SDK, no `claude -p`**: The pipeline does not import or call the Anthropic API directly, and does not shell out to `claude -p`. All LLM work goes through Claude Code subagents (Task tool) or Ollama. The legacy `config.py` + `utils.py` + `claude_pipe.py` pattern has been fully removed.
 - **Scripts are I/O only**: Python scripts handle fetching, caching, file extraction, and vault indexing. They do not make Claude API calls.
 - **Model allocation**: Haiku for search/classification (cheap, parallel). Sonnet for orchestration. Subagent dispatch via Task tool.
 - **State checkpoints**: Every pipeline stage writes state. Crash recovery resumes from the last checkpoint.
