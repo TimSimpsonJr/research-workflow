@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -208,23 +209,42 @@ def analyze(
     tick_staleness(accumulator, seen_pattern_ids)
 
     # 5. Promotion eligibility (+ contradiction detection)
+    def _contradiction_for(entry: AccumulatorEntry) -> dict | None:
+        """Return contradiction dict if entry conflicts with any graduated
+        pattern in the same (target_stage, domain_tags) bucket, else None."""
+        conflicts = [
+            p for p in learned.patterns
+            if p.target_stage == entry.target_stage
+            and (set(p.domain_tags) & set(entry.domain_tags))
+        ]
+        if not conflicts:
+            return None
+        return {
+            "candidate_pattern_id": entry.pattern_id,
+            "candidate_name": entry.name,
+            "conflicting_graduated_ids": [p.id for p in conflicts],
+            "conflicting_names": [p.name for p in conflicts],
+        }
+
     for entry in accumulator.entries:
-        if entry.status != "hold":
+        if entry.status not in ("hold", "promotion_pending"):
+            continue
+        if entry.status == "promotion_pending":
+            # Re-surface entries left pending by a prior aborted/dismissed
+            # Stage 10e prompt. The threshold was already met when status
+            # was first flipped to "promotion_pending"; no need to re-check.
+            # Recompute contradictions in case learned.patterns changed
+            # since the original eligibility check.
+            contradiction = _contradiction_for(entry)
+            if contradiction:
+                result.contradictions.append(contradiction)
+            result.promotion_candidates.append(entry)
             continue
         threshold = promotion_threshold_raised if entry.raised_bar else promotion_threshold
         if entry.sessions_seen >= threshold:
-            conflicts = [
-                p for p in learned.patterns
-                if p.target_stage == entry.target_stage
-                and (set(p.domain_tags) & set(entry.domain_tags))
-            ]
-            if conflicts:
-                result.contradictions.append({
-                    "candidate_pattern_id": entry.pattern_id,
-                    "candidate_name": entry.name,
-                    "conflicting_graduated_ids": [p.id for p in conflicts],
-                    "conflicting_names": [p.name for p in conflicts],
-                })
+            contradiction = _contradiction_for(entry)
+            if contradiction:
+                result.contradictions.append(contradiction)
             mark_promotion_pending(accumulator, entry.pattern_id)
             result.promotion_candidates.append(entry)
 
@@ -251,8 +271,10 @@ def _load_recent_cases(cases_dir: Path, window: int) -> list[dict]:
         try:
             out.append(json.loads(cf.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError) as e:
-            # Tolerant — skip malformed cases
-            print(f"[analyzer] skipping malformed case {cf.name}: {e}")
+            # Tolerant — skip malformed cases. Route to stderr so the
+            # JSON-only stdout contract for Stage 10d isn't broken by a
+            # single malformed case file polluting the orchestrator's parse.
+            print(f"[analyzer] skipping malformed case {cf.name}: {e}", file=sys.stderr)
     return out
 
 

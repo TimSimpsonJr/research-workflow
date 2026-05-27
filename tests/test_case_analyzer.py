@@ -309,6 +309,89 @@ def test_demote_syncs_count_when_existing_entry_is_fresh(tmp_path):
     assert entry.demotion_count == 2
 
 
+def test_analyzer_re_surfaces_aborted_promotion_pending(tmp_path):
+    """An accumulator entry left at status='promotion_pending' (because a
+    prior Stage 10e was aborted) must be re-surfaced in promotion_candidates
+    on the next analyzer run. Regression for codex round-2 finding
+    promotion-pending-reprompt cluster."""
+    from case_analyzer import analyze
+    from accumulator import (
+        Accumulator, AccumulatorEntry, save_accumulator, load_accumulator,
+    )
+    from datetime import datetime, timezone
+    import json
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+    now = datetime.now(timezone.utc).isoformat()
+
+    save_accumulator(acc_path, Accumulator(entries=[
+        AccumulatorEntry(
+            pattern_id="stuck-pid", name="Stuck pattern",
+            category="source-tier-bias", target_stage="search",
+            domain_tags=["civic"],
+            sessions_seen=3, sessions_since_last_seen=0,
+            status="promotion_pending", raised_bar=False, promotion_pending=True,
+            demotion_count=0,
+            evidence=[{"case_id": "c0", "signal": "..."}],
+            proposed_promotion_body="body", created_at=now, last_updated_at=now,
+        ),
+    ]))
+
+    case = {
+        "case_id": "c1", "domain_tags": ["other"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.8}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {"source_tiers": {}, "hop_chain": [], "queries": []},
+    }
+    (cases_dir / "c1.json").write_text(json.dumps(case))
+    result = analyze(
+        case_path=cases_dir / "c1.json",
+        accumulator_path=acc_path, learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+    )
+
+    assert len(result.promotion_candidates) == 1
+    assert result.promotion_candidates[0].pattern_id == "stuck-pid"
+
+
+def test_analyzer_skips_malformed_case_using_stderr_not_stdout(tmp_path, capsys):
+    """Malformed-case warnings in _load_recent_cases must go to stderr,
+    not stdout. Stage 10d requires pure JSON on stdout from the analyzer
+    subprocess. Regression for codex round-2 finding json-handshake cluster."""
+    from case_analyzer import analyze
+    import json
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+
+    # Write one good case and one malformed case
+    good_case = {
+        "case_id": "good", "domain_tags": ["x"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.8}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {"source_tiers": {}, "hop_chain": [], "queries": []},
+    }
+    (cases_dir / "good.json").write_text(json.dumps(good_case))
+    (cases_dir / "bad.json").write_text("{not valid json")
+
+    result = analyze(
+        case_path=cases_dir / "good.json",
+        accumulator_path=acc_path, learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+    )
+
+    captured = capsys.readouterr()
+    assert "skipping malformed case" in captured.err, \
+        "malformed-case warning must go to stderr"
+    assert "skipping malformed case" not in captured.out, \
+        "malformed-case warning must NOT contaminate stdout — would break orchestrator JSON parse"
+
+
 def test_analyzer_does_not_re_create_graduated_pattern(tmp_path):
     """After a pattern is graduated to learned_patterns, the heuristic
     continuing to detect it from cases must NOT create a duplicate
