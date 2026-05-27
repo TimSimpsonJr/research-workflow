@@ -5,7 +5,6 @@ __pycache__/
 .pytest_cache/
 .cache/
 repomix-output.txt
-scripts/config.py
 .venv/
 venv/
 *.log
