@@ -265,18 +265,21 @@ Researching {project} at depth {topic.depth}, ~{estimated_minutes}min. Proceed? 
 - `edit`: upgrade to `unified` strategy -- present the full plan as in Stage 3a below. The run is already created; Stage 3 will populate topics and approve. Also overwrite `run['strategy'] = 'unified'` since the user chose to upgrade.
 - `cancel`: call `abandon_run(STATE_DIR)` and stop.
 
-When `yes`: initialize topics now (since Stage 3 is being skipped):
+When `yes`: initialize topics now (since Stage 3 is being skipped), then advance the stage marker to `hop_loop` so a crash before Stage 4 resumes at the right place (not back at `triage`):
 
 ```bash
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from state import load_run, save_state, init_topic
+from state import load_run, save_state, init_topic, update_stage
 from pathlib import Path
-run = load_run(Path('STATE_DIR'))
+state_dir = Path('STATE_DIR')
+run = load_run(state_dir)
+# RESOLVER_RESPONSE is the parsed JSON from Stage 2b/2d; substitute its topics list.
 plan_topics = RESOLVER_RESPONSE['topics']
 run['topics'] = [init_topic(t['topic'], t['mode'], t['depth']) for t in plan_topics]
-save_state(Path('STATE_DIR'), run)
+save_state(state_dir, run)
+update_stage(state_dir, 'hop_loop')
 "
 ```
 
@@ -447,7 +450,7 @@ The helper dedupes — calling it again with overlapping URLs (e.g., the same UR
 
 ### 4c. Media
 
-Run `fetch_media.py` per article as in v2, but write to per-hop temp dirs:
+Before invoking `fetch_media.py`, split this hop's `fetch_results_hop{N}.json` into per-article content files. For each entry in `fetched`, write its `content` field to `STATE_DIR/content_hop{N}_{index}.md` (where `{index}` is the 0-based index of the article in `fetched`). Then run `fetch_media.py` per article:
 
 ```bash
 python "SCRIPTS/fetch_media.py" --content "STATE_DIR/content_hop{N}_{index}.md" --assets-dir "ASSETS_DIR" --topic "{topic_slug}" --run-id "{RUN_ID}" --output "STATE_DIR/rewritten_hop{N}_{index}.md"
