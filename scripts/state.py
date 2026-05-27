@@ -149,6 +149,30 @@ def increment_replan(state_dir: Path) -> None:
     save_state(state_dir, run)
 
 
+def add_seen_urls(state_dir: Path, topic_name: str, urls: list[str]) -> None:
+    """Extend a topic's seen_urls with newly-fetched URLs, deduplicated.
+
+    Called by Stage 4b after fetch_and_clean.py reports which URLs succeeded.
+    The list ordering is preserved (existing entries first, new entries appended),
+    and duplicates are skipped — the orchestrator can pass the raw fetch output
+    without pre-filtering.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            existing = set(t["seen_urls"])
+            for url in urls:
+                if url not in existing:
+                    t["seen_urls"].append(url)
+                    existing.add(url)
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
 _RESERVED_DECISION_KEYS = {"decision", "at"}
 
 

@@ -429,7 +429,19 @@ Run `fetch_and_clean.py` once for all active topics' selected URLs at this hop:
 python "SCRIPTS/fetch_and_clean.py" --input "STATE_DIR/search_context_hop{N}.json" --output "STATE_DIR/fetch_results_hop{N}.json"
 ```
 
-Update each topic's `seen_urls` with the URLs that were successfully fetched.
+Update each topic's `seen_urls` with the URLs that were successfully fetched, using the `add_seen_urls` state helper. For each topic, pass the list of URLs that ended up in `fetch_results_hop{N}.fetched` (i.e., the URLs that actually returned content, not the failed ones):
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import add_seen_urls
+from pathlib import Path
+add_seen_urls(Path('STATE_DIR'), topic_name='TOPIC', urls=URLS_FETCHED_FOR_TOPIC)
+"
+```
+
+The helper dedupes — calling it again with overlapping URLs (e.g., the same URL appears in multiple hops) is safe.
 
 **If `fetched` is empty and `failed` is non-empty:** treat the hop as a failure for the affected topic(s). The hop-planner in 4e will see zero new sources and decide accordingly. If ALL topics had zero successful fetches, abandon the run and stop (no fetched content means downstream stages have nothing to work with).
 

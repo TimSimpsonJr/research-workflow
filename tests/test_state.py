@@ -242,6 +242,30 @@ def test_bump_max_hops(tmp_path):
     assert load_run(tmp_path)["topics"][0]["max_hops"] == 4
 
 
+def test_add_seen_urls_appends_dedup(tmp_path):
+    """add_seen_urls preserves order, skips duplicates, can be called repeatedly."""
+    from state import create_run, init_topic, add_seen_urls, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    add_seen_urls(tmp_path, topic_name="X", urls=["https://a", "https://b"])
+    add_seen_urls(tmp_path, topic_name="X", urls=["https://b", "https://c"])  # b is dup
+
+    assert load_run(tmp_path)["topics"][0]["seen_urls"] == ["https://a", "https://b", "https://c"]
+
+
+def test_add_seen_urls_unknown_topic_raises(tmp_path):
+    import pytest
+    from state import create_run, init_topic, save_state, add_seen_urls
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    with pytest.raises(KeyError, match="Topic not found"):
+        add_seen_urls(tmp_path, topic_name="missing", urls=["https://a"])
+
+
 def test_apply_hop_decision_continue_is_atomic(tmp_path):
     """apply_hop_decision applies hop record + routing + quality signals + status in one save."""
     from state import create_run, init_topic, save_state, apply_hop_decision, load_run
