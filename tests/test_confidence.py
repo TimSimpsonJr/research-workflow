@@ -3,6 +3,7 @@ from confidence import (
     DEPTH_PROFILES,
     get_depth_profile,
     primary_source_presence,
+    source_count_adequacy,
     tier_diversity_weight,
     topic_coverage,
 )
@@ -87,3 +88,19 @@ def test_primary_source_presence_two():
 def test_primary_source_presence_caps_at_two():
     sources = [{"is_primary": True}] * 5
     assert primary_source_presence(sources) == 1.0
+
+
+def test_source_count_adequacy_below_target():
+    assert source_count_adequacy(sources_count=10, target=20) == 0.5
+
+
+def test_source_count_adequacy_at_target():
+    assert source_count_adequacy(sources_count=20, target=20) == 1.0
+
+
+def test_source_count_adequacy_above_target():
+    assert source_count_adequacy(sources_count=30, target=20) == 1.0
+
+
+def test_source_count_adequacy_zero():
+    assert source_count_adequacy(sources_count=0, target=20) == 0.0

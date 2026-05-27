@@ -38,3 +38,10 @@ def primary_source_presence(sources: list[dict]) -> float:
     """Capped at 1.0 when 2+ primary sources present."""
     primary_count = sum(1 for s in sources if s.get("is_primary"))
     return min(1.0, primary_count / 2)
+
+
+def source_count_adequacy(sources_count: int, target: int) -> float:
+    """Linear up to target, then capped at 1.0."""
+    if target <= 0:
+        return 0.0
+    return min(1.0, sources_count / target)
