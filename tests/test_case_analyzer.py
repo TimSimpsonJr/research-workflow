@@ -175,3 +175,65 @@ def test_semantic_merge_disabled_when_haiku_none(tmp_path):
     pids = {e.pattern_id for e in acc.entries}
     assert "existing-pid" in pids
     assert len(pids) >= 2, "should have created a fresh entry alongside existing-pid"
+
+
+def test_contradiction_flagged_at_promotion_time(tmp_path):
+    """When an accumulator entry becomes promotion-eligible and the same
+    (domain, target_stage) bucket already has a graduated pattern in
+    learned_patterns.md, the analyzer flags it in result.contradictions."""
+    from case_analyzer import analyze
+    from accumulator import Accumulator, AccumulatorEntry, save_accumulator
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, save_learned_patterns
+    from datetime import datetime, timezone
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Seed a graduated pattern in learned_patterns.md
+    save_learned_patterns(lp_path, LearnedPatternsFile(patterns=[
+        LearnedPattern(
+            id="graduated-pid", name="Use broad queries for tech",
+            body="Broad queries outperform narrow.", domain_tags=["tech"],
+            target_stage="search", category="query-template",
+            wins=8, losses=1, promoted_at="2026-04-01", demotion_count=0,
+        ),
+    ]))
+
+    # Seed an accumulator entry already at promotion threshold for the same bucket
+    save_accumulator(acc_path, Accumulator(entries=[
+        AccumulatorEntry(
+            pattern_id="candidate-pid", name="Use narrow queries for tech",
+            category="query-template", target_stage="search",
+            domain_tags=["tech"], sessions_seen=3, sessions_since_last_seen=0,
+            status="hold", raised_bar=False, promotion_pending=False, demotion_count=0,
+            evidence=[{"case_id": "c0", "signal": "narrow=5/6"}],
+            proposed_promotion_body="Narrow queries outperform broad.",
+            created_at=now, last_updated_at=now,
+        ),
+    ]))
+
+    # Drive analyze() — does NOT need to produce new candidates; we just need
+    # the existing accumulator entry to hit the promotion-eligibility check.
+    case = {
+        "case_id": "c1", "domain_tags": ["tech"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.8}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {"source_tiers": {}, "hop_chain": [], "queries": []},
+    }
+    (cases_dir / "c1.json").write_text(json.dumps(case))
+    result = analyze(
+        case_path=cases_dir / "c1.json",
+        accumulator_path=acc_path,
+        learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+    )
+
+    assert len(result.promotion_candidates) == 1
+    assert result.promotion_candidates[0].pattern_id == "candidate-pid"
+    assert len(result.contradictions) == 1
+    contradiction = result.contradictions[0]
+    assert contradiction["candidate_pattern_id"] == "candidate-pid"
+    assert "graduated-pid" in contradiction["conflicting_graduated_ids"]
