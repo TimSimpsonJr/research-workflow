@@ -523,6 +523,20 @@ def test_record_user_decision(tmp_path):
     assert "at" in decisions[0]
 
 
+def test_record_applied_pattern_appends_unique(tmp_path):
+    """record_applied_pattern adds a pattern_id; duplicates are no-ops."""
+    from state import create_run, record_applied_pattern, load_run
+    create_run(tmp_path, run_id="t", tier="base")
+    record_applied_pattern(tmp_path, "civic-alpr-t1-dominance-3f7a")
+    record_applied_pattern(tmp_path, "tech-entity-h2-9c2b")
+    record_applied_pattern(tmp_path, "civic-alpr-t1-dominance-3f7a")  # dup
+    run = load_run(tmp_path)
+    assert run["applied_patterns"] == [
+        "civic-alpr-t1-dominance-3f7a",
+        "tech-entity-h2-9c2b",
+    ]
+
+
 def test_record_user_decision_rejects_reserved_keys(tmp_path):
     """Caller-supplied 'decision' or 'at' in **details would silently override canonical fields."""
     import pytest

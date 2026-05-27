@@ -201,6 +201,27 @@ def record_user_decision(state_dir: Path, decision: str, **details) -> None:
     save_state(state_dir, run)
 
 
+def record_applied_pattern(state_dir: Path, pattern_id: str) -> None:
+    """Append a pattern_id to the current run's applied_patterns list.
+
+    Idempotent: duplicate pattern_ids are not re-added. Used by the
+    orchestrator at each subagent dispatch to record which learned patterns
+    were injected into a prompt during the run. At end of run, the analyzer
+    reads applied_patterns from the case to compute W/L scores.
+
+    Silently no-ops if there is no active run (telemetry shouldn't block
+    the pipeline). Uses setdefault so v3.0.0 runs resumed under v3.1.0
+    code still work even if the field was never initialized.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        return
+    applied = run.setdefault("applied_patterns", [])
+    if pattern_id not in applied:
+        applied.append(pattern_id)
+        _atomic_write(state_dir / CURRENT_RUN_FILE, run)
+
+
 _KNOWN_USAGE_MODELS = {"haiku", "sonnet", "opus", "ollama"}
 
 
