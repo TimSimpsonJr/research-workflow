@@ -1,5 +1,10 @@
 # tests/test_confidence.py
-from confidence import DEPTH_PROFILES, get_depth_profile, tier_diversity_weight
+from confidence import (
+    DEPTH_PROFILES,
+    get_depth_profile,
+    tier_diversity_weight,
+    topic_coverage,
+)
 
 
 def test_depth_profiles_have_required_fields():
@@ -41,3 +46,23 @@ def test_tier_diversity_mixed():
 
 def test_tier_diversity_empty():
     assert tier_diversity_weight([]) == 0.0
+
+
+def test_topic_coverage_three_t2_sources():
+    sources = [{"tier": "T2"}, {"tier": "T2"}, {"tier": "T2"}]
+    assert topic_coverage(sources) == 1.0
+
+
+def test_topic_coverage_two_t1_sources():
+    sources = [{"tier": "T1"}, {"tier": "T1"}]
+    assert topic_coverage(sources) == 2 / 3
+
+
+def test_topic_coverage_low_tier_excluded():
+    sources = [{"tier": "T3"}, {"tier": "T4"}, {"tier": "T3"}]
+    assert topic_coverage(sources) == 0.0
+
+
+def test_topic_coverage_mixed():
+    sources = [{"tier": "T1"}, {"tier": "T3"}, {"tier": "T2"}, {"tier": "T4"}]
+    assert topic_coverage(sources) == 2 / 3

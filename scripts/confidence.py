@@ -26,3 +26,9 @@ def tier_diversity_weight(sources: list[dict]) -> float:
     if not sources:
         return 0.0
     return sum(TIER_WEIGHTS.get(s["tier"], 0.25) for s in sources) / len(sources)
+
+
+def topic_coverage(sources: list[dict]) -> float:
+    """Fraction of T2+ sources up to a count of 3. Caps at 1.0."""
+    t2plus = sum(1 for s in sources if s["tier"] in {"T1", "T2"})
+    return min(1.0, t2plus / 3)
