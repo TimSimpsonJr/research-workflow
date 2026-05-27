@@ -139,3 +139,23 @@ def test_load_run_drops_missing_version(tmp_path, capsys):
     state_file.write_text(json.dumps({"run_id": "old", "tier": "full"}))  # no version
     result = load_run(tmp_path)
     assert result is None
+
+
+def test_create_run_topic_initialization(tmp_path):
+    from state import create_run, init_topic
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    topic = init_topic("SC ALPR programs", mode="web_research", depth="standard")
+    assert topic == {
+        "topic": "SC ALPR programs",
+        "mode": "web_research",
+        "depth": "standard",
+        "max_hops": 3,
+        "current_hop": 0,
+        "status": "active",
+        "hop_genealogy": [],
+        "confidence_history": [],
+        "contradiction_rate": 0.0,
+        "seen_urls": [],
+        "replan_hint": None,
+        "next_hop": None,
+    }

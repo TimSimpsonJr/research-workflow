@@ -12,6 +12,8 @@ import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+from confidence import get_depth_profile
+
 CURRENT_RUN_FILE = "current_run.json"
 STATE_VERSION = 3
 
@@ -26,6 +28,32 @@ def _atomic_write(path: Path, data: dict) -> None:
 def save_state(state_dir: Path, run: dict) -> None:
     """Save the active run state atomically. Public wrapper around _atomic_write."""
     _atomic_write(state_dir / CURRENT_RUN_FILE, run)
+
+
+def init_topic(topic: str, mode: str, depth: str) -> dict:
+    """Create a fresh topic state entry for the run.
+
+    The 12 fields cover identity (topic/mode/depth), hop-loop budget
+    (max_hops/current_hop), lifecycle (status), audit trail (hop_genealogy),
+    quality signals (confidence_history/contradiction_rate), dedup (seen_urls),
+    and forward routing (next_hop for "continue", replan_hint for "replan").
+    next_hop and replan_hint are mutually exclusive in practice.
+    """
+    profile = get_depth_profile(depth)
+    return {
+        "topic": topic,
+        "mode": mode,
+        "depth": depth,
+        "max_hops": profile["max_hops"],
+        "current_hop": 0,
+        "status": "active",
+        "hop_genealogy": [],
+        "confidence_history": [],
+        "contradiction_rate": 0.0,
+        "seen_urls": [],
+        "replan_hint": None,
+        "next_hop": None,
+    }
 
 
 def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
