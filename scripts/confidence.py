@@ -16,3 +16,13 @@ DEPTH_PROFILES = {
 def get_depth_profile(name: str) -> dict:
     """Return the depth profile for the given name. Raises KeyError if unknown."""
     return DEPTH_PROFILES[name]
+
+
+TIER_WEIGHTS = {"T1": 1.0, "T2": 0.75, "T3": 0.5, "T4": 0.25}
+
+
+def tier_diversity_weight(sources: list[dict]) -> float:
+    """Average tier weight across sources. Empty list returns 0.0."""
+    if not sources:
+        return 0.0
+    return sum(TIER_WEIGHTS.get(s["tier"], 0.25) for s in sources) / len(sources)
