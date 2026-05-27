@@ -194,3 +194,49 @@ def test_mark_rejected_sets_status():
     mark_rejected(acc, pattern_id="p1")
     assert acc.entries[0].status == "rejected"
     assert acc.entries[0].promotion_pending is False
+
+
+def test_mark_promotion_pending():
+    from accumulator import Accumulator, AccumulatorEntry, mark_promotion_pending
+    e = AccumulatorEntry(
+        pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], sessions_seen=3, sessions_since_last_seen=0,
+        status="hold", raised_bar=False, promotion_pending=False,
+        demotion_count=0, evidence=[], proposed_promotion_body="",
+        created_at="", last_updated_at="",
+    )
+    acc = Accumulator(entries=[e])
+    mark_promotion_pending(acc, "p1")
+    assert acc.entries[0].promotion_pending is True
+    assert acc.entries[0].status == "promotion_pending"
+
+
+def test_clear_promotion_pending_returns_to_hold():
+    """clear_promotion_pending sets status back to hold without deciding."""
+    from accumulator import Accumulator, AccumulatorEntry, clear_promotion_pending
+    e = AccumulatorEntry(
+        pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], sessions_seen=3, sessions_since_last_seen=0,
+        status="promotion_pending", raised_bar=False, promotion_pending=True,
+        demotion_count=0, evidence=[], proposed_promotion_body="",
+        created_at="", last_updated_at="",
+    )
+    acc = Accumulator(entries=[e])
+    clear_promotion_pending(acc, "p1")
+    assert acc.entries[0].status == "hold"
+    assert acc.entries[0].promotion_pending is False
+
+
+def test_remove_entry_for_graduation():
+    """After successful promotion to learned_patterns.md, entry is removed."""
+    from accumulator import Accumulator, AccumulatorEntry, remove_entry
+    e = AccumulatorEntry(
+        pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], sessions_seen=3, sessions_since_last_seen=0,
+        status="promotion_pending", raised_bar=False, promotion_pending=True,
+        demotion_count=0, evidence=[], proposed_promotion_body="",
+        created_at="", last_updated_at="",
+    )
+    acc = Accumulator(entries=[e])
+    remove_entry(acc, "p1")
+    assert len(acc.entries) == 0

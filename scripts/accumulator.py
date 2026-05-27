@@ -171,3 +171,28 @@ def mark_rejected(acc: Accumulator, pattern_id: str) -> None:
             entry.promotion_pending = False
             entry.last_updated_at = datetime.now(timezone.utc).isoformat()
             return
+
+
+def mark_promotion_pending(acc: Accumulator, pattern_id: str) -> None:
+    """Flag an entry as eligible for promotion; status -> promotion_pending."""
+    for entry in acc.entries:
+        if entry.pattern_id == pattern_id:
+            entry.promotion_pending = True
+            entry.status = "promotion_pending"
+            entry.last_updated_at = datetime.now(timezone.utc).isoformat()
+            return
+
+
+def clear_promotion_pending(acc: Accumulator, pattern_id: str) -> None:
+    """Clear promotion_pending flag; status -> hold (user picked 'hold')."""
+    for entry in acc.entries:
+        if entry.pattern_id == pattern_id:
+            entry.promotion_pending = False
+            entry.status = "hold"
+            entry.last_updated_at = datetime.now(timezone.utc).isoformat()
+            return
+
+
+def remove_entry(acc: Accumulator, pattern_id: str) -> None:
+    """Remove entry by pattern_id (used after successful graduation)."""
+    acc.entries = [e for e in acc.entries if e.pattern_id != pattern_id]
