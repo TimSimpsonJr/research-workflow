@@ -426,14 +426,15 @@ from accumulator import (
 
 
 def test_load_missing_returns_empty(tmp_path):
-    """Missing accumulator.json returns an empty Accumulator."""
-    acc = load_accumulator(tmp_path / "missing.json")
+    """Missing accumulator.json returns an empty Accumulator with no warnings."""
+    acc, warnings = load_accumulator(tmp_path / "missing.json")
     assert acc.version == ACCUMULATOR_SCHEMA_VERSION
     assert acc.entries == []
+    assert warnings == []
 
 
 def test_save_then_load_roundtrip(tmp_path):
-    """Round-trip preserves all fields."""
+    """Round-trip preserves all fields; no warnings on clean load."""
     target = tmp_path / "accumulator.json"
     entry = AccumulatorEntry(
         pattern_id="civic-alpr-t1-dominance-3f7a",
@@ -454,8 +455,9 @@ def test_save_then_load_roundtrip(tmp_path):
     )
     acc = Accumulator(version=ACCUMULATOR_SCHEMA_VERSION, entries=[entry])
     save_accumulator(target, acc)
-    loaded = load_accumulator(target)
+    loaded, warnings = load_accumulator(target)
     assert loaded == acc
+    assert warnings == []
 
 
 def test_save_writes_atomic_via_state(tmp_path):
@@ -466,6 +468,27 @@ def test_save_writes_atomic_via_state(tmp_path):
     assert target.exists()
     # No leftover .tmp file
     assert not target.with_suffix(".json.tmp").exists()
+
+
+def test_load_corrupt_returns_empty_with_warning(tmp_path):
+    """Malformed JSON returns empty Accumulator + corrupted warning."""
+    target = tmp_path / "accumulator.json"
+    target.write_text("{not valid json")
+    acc, warnings = load_accumulator(target)
+    assert acc.entries == []
+    assert len(warnings) == 1
+    assert "accumulator_corrupted" in warnings[0]
+
+
+def test_load_version_mismatch_returns_empty_with_warning(tmp_path):
+    """Schema version mismatch returns empty Accumulator + schema_mismatch warning."""
+    import json as _j
+    target = tmp_path / "accumulator.json"
+    target.write_text(_j.dumps({"version": 99, "entries": []}))
+    acc, warnings = load_accumulator(target)
+    assert acc.entries == []
+    assert len(warnings) == 1
+    assert "accumulator_schema_mismatch" in warnings[0]
 ```
 
 **Step 2: Verify failure**
@@ -526,14 +549,43 @@ class Accumulator:
     entries: list[AccumulatorEntry] = field(default_factory=list)
 
 
-def load_accumulator(path: Path) -> Accumulator:
-    """Load accumulator from JSON file. Returns empty Accumulator if missing."""
+class AccumulatorLoadError(Exception):
+    """Raised by load_accumulator_strict when the file is corrupt or
+    schema-incompatible. Callers that want graceful degradation should use
+    load_accumulator (which catches and returns an empty Accumulator + warning)."""
+
+
+def load_accumulator(path: Path) -> tuple[Accumulator, list[str]]:
+    """Graceful load: returns (Accumulator, warnings). Never raises.
+
+    On parse error or schema-version mismatch: logs to warnings, returns an
+    empty Accumulator. The analyzer surfaces warnings in AnalyzerResult so
+    Stage 10b can prompt the user to rebuild from cases if desired.
+    """
+    warnings: list[str] = []
     if not path.exists():
-        return Accumulator()
-    data = json.loads(path.read_text(encoding="utf-8"))
-    entries = [AccumulatorEntry(**e) for e in data.get("entries", [])]
-    return Accumulator(version=data.get("version", ACCUMULATOR_SCHEMA_VERSION),
-                       entries=entries)
+        return Accumulator(), warnings
+    try:
+        text = path.read_text(encoding="utf-8")
+        data = json.loads(text)
+    except (OSError, json.JSONDecodeError) as e:
+        warnings.append(f"accumulator_corrupted: {path} could not be read or parsed ({e})")
+        return Accumulator(), warnings
+    file_version = data.get("version")
+    if file_version != ACCUMULATOR_SCHEMA_VERSION:
+        warnings.append(
+            f"accumulator_schema_mismatch: file is version {file_version!r}, "
+            f"code expects {ACCUMULATOR_SCHEMA_VERSION}. Treating as empty."
+        )
+        return Accumulator(), warnings
+    try:
+        entries = [AccumulatorEntry(**e) for e in data.get("entries", [])]
+    except TypeError as e:
+        # Schema-shape mismatch (e.g., entry missing required field after a
+        # forward-incompatible edit). Treat the whole file as corrupt.
+        warnings.append(f"accumulator_corrupted: entry shape unexpected ({e})")
+        return Accumulator(), warnings
+    return Accumulator(version=file_version, entries=entries), warnings
 
 
 def save_accumulator(path: Path, acc: Accumulator) -> None:
@@ -1047,7 +1099,7 @@ from learned_patterns import (
 
 
 def test_save_then_load_roundtrip(tmp_path):
-    """Round-trip preserves all fields and grouping."""
+    """Round-trip preserves all fields and grouping; no warnings on clean load."""
     target = tmp_path / "learned_patterns.md"
     file = LearnedPatternsFile(
         version=LEARNED_PATTERNS_SCHEMA_VERSION,
@@ -1058,6 +1110,7 @@ def test_save_then_load_roundtrip(tmp_path):
                 body="T1 sources dominate: government sites, fusion center reports, ACLU policy memos.",
                 domain_tags=["civic", "alpr"],
                 target_stage="search",
+                category="source-tier-bias",
                 wins=12, losses=1,
                 promoted_at="2026-04-15",
                 demotion_count=0,
@@ -1068,6 +1121,7 @@ def test_save_then_load_roundtrip(tmp_path):
                 body="typically lifts confidence 0.5→0.75 for SC topics.",
                 domain_tags=["civic", "alpr"],
                 target_stage="hop_planner",
+                category="hop-pattern-bias",
                 wins=5, losses=1,
                 promoted_at="2026-05-02",
                 demotion_count=0,
@@ -1075,15 +1129,27 @@ def test_save_then_load_roundtrip(tmp_path):
         ],
     )
     save_learned_patterns(target, file)
-    loaded = load_learned_patterns(target)
+    loaded, warnings = load_learned_patterns(target)
     assert loaded == file
+    assert warnings == []
 
 
 def test_load_missing_returns_empty(tmp_path):
-    """Missing file returns empty LearnedPatternsFile."""
-    loaded = load_learned_patterns(tmp_path / "missing.md")
+    """Missing file returns empty LearnedPatternsFile with no warnings."""
+    loaded, warnings = load_learned_patterns(tmp_path / "missing.md")
     assert loaded.version == LEARNED_PATTERNS_SCHEMA_VERSION
     assert loaded.patterns == []
+    assert warnings == []
+
+
+def test_load_version_mismatch_returns_empty_with_warning(tmp_path):
+    """Schema version mismatch returns empty file + warning."""
+    target = tmp_path / "learned_patterns.md"
+    target.write_text("---\nversion: 99\n---\n\n## civic\n\n### Search patterns\n\n- **X** — body.\n  - id: `x`\n  - score: 1W / 0L (1 uses)\n  - promoted: 2026-04-15\n  - demotions: 0\n")
+    loaded, warnings = load_learned_patterns(target)
+    assert loaded.patterns == []
+    assert len(warnings) == 1
+    assert "learned_patterns_schema_mismatch" in warnings[0]
 ```
 
 **Step 2: Verify failure**
@@ -1123,6 +1189,7 @@ class LearnedPattern:
     body: str
     domain_tags: list[str]
     target_stage: str  # "search" | "hop_planner" | "classify"
+    category: str = ""  # source-tier-bias | hop-pattern-bias | query-template — preserved from accumulator entry on promotion so demotion can restore it
     wins: int = 0
     losses: int = 0
     promoted_at: str = ""
@@ -1165,6 +1232,7 @@ def save_learned_patterns(path: Path, file: LearnedPatternsFile) -> None:
                 total = p.wins + p.losses
                 lines.append(f"- **{p.name}** — {p.body}")
                 lines.append(f"  - id: `{p.id}`")
+                lines.append(f"  - category: {p.category}")
                 lines.append(f"  - score: {p.wins}W / {p.losses}L ({total} uses)")
                 lines.append(f"  - promoted: {p.promoted_at}")
                 lines.append(f"  - demotions: {p.demotion_count}")
@@ -1172,14 +1240,31 @@ def save_learned_patterns(path: Path, file: LearnedPatternsFile) -> None:
     write_shared_state_atomically(path, "\n".join(lines).rstrip() + "\n")
 
 
-def load_learned_patterns(path: Path) -> LearnedPatternsFile:
-    """Parse learned_patterns.md. Tolerant — skips malformed entries with a
-    warning logged via `print()` (no logger setup in scripts/)."""
+def load_learned_patterns(path: Path) -> tuple[LearnedPatternsFile, list[str]]:
+    """Graceful load: returns (LearnedPatternsFile, warnings). Never raises.
+
+    Tolerant per-entry parsing happens inside _parse_learned_patterns (malformed
+    individual entries are skipped). Top-level concerns surfaced here:
+    - missing file → empty file, no warning
+    - read error → empty file, warning
+    - schema version mismatch → empty file, warning
+    """
+    warnings: list[str] = []
     if not path.exists():
-        return LearnedPatternsFile()
-    text = path.read_text(encoding="utf-8")
-    # ... (parser implementation in task 3.2)
-    return _parse_learned_patterns(text)
+        return LearnedPatternsFile(), warnings
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as e:
+        warnings.append(f"learned_patterns_corrupted: {path} could not be read ({e})")
+        return LearnedPatternsFile(), warnings
+    parsed = _parse_learned_patterns(text)
+    if parsed.version != LEARNED_PATTERNS_SCHEMA_VERSION:
+        warnings.append(
+            f"learned_patterns_schema_mismatch: file is version {parsed.version!r}, "
+            f"code expects {LEARNED_PATTERNS_SCHEMA_VERSION}. Treating as empty."
+        )
+        return LearnedPatternsFile(), warnings
+    return parsed, warnings
 
 
 def _parse_learned_patterns(text: str) -> LearnedPatternsFile:
@@ -1239,7 +1324,7 @@ version: 1
 """
     target = tmp_path / "learned_patterns.md"
     target.write_text(body)
-    loaded = load_learned_patterns(target)
+    loaded, _warnings = load_learned_patterns(target)
     assert len(loaded.patterns) == 1
     assert loaded.patterns[0].id == "good-1"
 
@@ -1265,7 +1350,7 @@ version: 1
     with tempfile.TemporaryDirectory() as td:
         p = Path(td) / "lp.md"
         p.write_text(body)
-        loaded = load_learned_patterns(p)
+        loaded, _warnings = load_learned_patterns(p)
     assert len(loaded.patterns) == 1
     p0 = loaded.patterns[0]
     assert p0.wins == 12
@@ -1346,6 +1431,7 @@ def _parse_learned_patterns(text: str) -> LearnedPatternsFile:
             body=pending["body"],
             domain_tags=list(current_domain),
             target_stage=current_stage or "search",
+            category=pending.get("category", ""),
             wins=wins,
             losses=losses,
             promoted_at=pending.get("promoted", ""),
@@ -1429,7 +1515,9 @@ def test_filter_by_topic_text_substring_match():
         LearnedPattern(id="c", name="C", body="", domain_tags=["civic"],
                        target_stage="hop_planner"),
     ])
-    relevant = filter_by_topic_text(f, topics=["ALPR programs in Greenville"])
+    # "civic" appears in topic text → matches a (tagged civic/alpr) and c (tagged civic).
+    # b (tagged only "tech") does NOT match — "tech" not in topic text.
+    relevant = filter_by_topic_text(f, topics=["civic ALPR programs in Greenville"])
     assert {p.id for p in relevant} == {"a", "c"}
 
 
@@ -2418,6 +2506,7 @@ def analyze(
     promotion_threshold: int = 3,
     promotion_threshold_raised: int = 5,
     haiku_dispatch: Callable | None = None,
+    force_rebuild_accumulator: bool = False,
 ) -> AnalyzerResult:
     """Run the analyzer at Stage 10b.
 
@@ -2427,6 +2516,11 @@ def analyze(
 
     haiku_dispatch is an optional callable for semantic comparison. None means
     skip the semantic compare (conservative-distinct treatment).
+
+    force_rebuild_accumulator=True ignores the existing accumulator file entirely
+    and starts fresh. Stage 10b sets this when the user confirms a corrupt-state
+    rebuild prompt. The fresh accumulator gets repopulated from this run's
+    candidate detection; prior `rejected` flags are NOT preserved.
     """
     result = AnalyzerResult()
 
@@ -2436,9 +2530,15 @@ def analyze(
 
     case = json.loads(case_path.read_text(encoding="utf-8"))
 
-    # Load state
-    accumulator = load_accumulator(accumulator_path)
-    learned = load_learned_patterns(learned_patterns_path)
+    # Load state (both helpers return (data, warnings); warnings propagate to result)
+    if force_rebuild_accumulator:
+        accumulator = Accumulator()
+        result.warnings.append("accumulator_rebuilt_from_cases: prior rejected flags lost")
+    else:
+        accumulator, acc_warnings = load_accumulator(accumulator_path)
+        result.warnings.extend(acc_warnings)
+    learned, lp_warnings = load_learned_patterns(learned_patterns_path)
+    result.warnings.extend(lp_warnings)
 
     # 1. Score updates for applied_patterns
     outcome = compute_run_outcome(case, confidence_target=confidence_target)
@@ -2451,32 +2551,39 @@ def analyze(
     # 2. Demotion sweep
     demotion_targets = find_demotion_targets(learned)
     for target in demotion_targets:
-        # Pull the pattern back into accumulator as a candidate, then remove from learned
+        # Reconstruction-or-update logic mirrors accumulator.demote() so the
+        # 2nd-demotion → rejected rule still fires whether or not the
+        # accumulator currently has an entry for this pattern_id.
         existing = next((e for e in accumulator.entries if e.pattern_id == target.id), None)
+        new_demotion_count = target.demotion_count + 1
         if existing is None:
-            # Reconstruct an accumulator entry from the learned pattern
+            # Pattern was promoted out and accumulator entry was removed.
+            # Reconstruct it, applying the same status rules as accumulator.demote().
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc).isoformat()
+            permanent = new_demotion_count >= 2
             accumulator.entries.append(AccumulatorEntry(
                 pattern_id=target.id,
                 name=target.name,
-                category="demoted",  # category lost on demotion; fine
+                category=target.category,  # preserved from LearnedPattern (added in Task 3.1)
                 target_stage=target.target_stage,
                 domain_tags=list(target.domain_tags),
                 sessions_seen=0,
                 sessions_since_last_seen=0,
-                status="hold",
-                raised_bar=True,
+                status=("rejected" if permanent else "hold"),
+                raised_bar=(not permanent),  # only meaningful for re-graduation candidates
                 promotion_pending=False,
-                demotion_count=target.demotion_count + 1,
+                demotion_count=new_demotion_count,
                 evidence=[],
                 proposed_promotion_body=target.body,
                 created_at=now,
                 last_updated_at=now,
             ))
         else:
+            # Accumulator entry exists — defer to the unified demote() helper
+            # which already implements the 1st/2nd demotion rules correctly.
             demote(accumulator, target.id)
-        # Remove from learned
+        # Remove from learned regardless of new status (rejected patterns live in accumulator)
         learned.patterns = [p for p in learned.patterns if p.id != target.id]
         result.demotions_applied += 1
 
@@ -2858,7 +2965,7 @@ import sys, json
 sys.path.insert(0, 'SCRIPTS')
 from learned_patterns import load_learned_patterns, filter_by_topic_text, group_by_stage
 from pathlib import Path
-lp = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+lp, _warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
 relevant = filter_by_topic_text(lp, topics=TOPIC_STRINGS)
 grouped = group_by_stage(relevant)
 print(json.dumps({stage: [p.id for p in patterns] for stage, patterns in grouped.items()}))
@@ -2868,6 +2975,8 @@ print(json.dumps({stage: [p.id for p in patterns] for stage, patterns in grouped
 Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`. Substitute `TOPIC_STRINGS` with the list of topic strings from the resolver output (Stage 3's `final['topics']` — use each topic's `topic` field).
 
 **Why topic-text matching, not `domain_tags` matching at this stage:** v3.0.0 only derives `domain_tags` at case-write time (Stage 10), computed from tags assigned to written notes. At Stage 2 no notes exist yet. Topic strings are the strongest signal we have for relevance. Stage 10b's analyzer uses real `domain_tags` from the just-written case via `filter_relevant`.
+
+**Known limitation of substring-only matching:** patterns tagged with high-level concepts that don't appear verbatim in topic text (e.g., a pattern tagged `["civic"]` from a prior run won't match the topic `"ALPR programs in Greenville"` because "civic" isn't in the topic string). This is intentional for v3.1.0 — broader semantic matching would require an additional classification step at Stage 2 (cost we don't want to pay yet). The user benefits less from learned patterns early in a run but gets full credit at Stage 10b scoring once `domain_tags` are derived from written notes. Revisit for v3.2.0 if real usage shows this is too lossy.
 
 Parse the JSON output and store:
 - `LEARNED_BY_STAGE` = the returned dict mapping `search` / `hop_planner` / `classify` → list of pattern IDs
@@ -2904,7 +3013,7 @@ import sys, json
 sys.path.insert(0, 'SCRIPTS')
 from learned_patterns import load_learned_patterns
 from pathlib import Path
-lp = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+lp, _warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
 ids = LEARNED_IDS_FOR_STAGE
 out = [{'id': p.id, 'name': p.name, 'body': p.body} for p in lp.patterns if p.id in ids]
 print(json.dumps(out))
@@ -3001,9 +3110,36 @@ print(json.dumps({
 "
 ```
 
-Parse the JSON output. If `promotion_candidates` is non-empty, proceed to Stage 10c. If empty, skip 10c.
+Parse the JSON output.
 
-If `warnings` is non-empty, log them to the final completion summary at Stage 10d.
+**Corrupt-state rebuild prompt.** Scan `warnings` for `accumulator_corrupted:` markers. If any are present:
+
+Show the user:
+
+```
+Your accumulator file appears corrupted:
+
+  {warning text from analyzer}
+
+Rebuild it now by re-running heuristic detection over your case history?
+This loses any previously-rejected pattern flags (you'll need to re-reject
+them as they re-emerge). Skip to continue this run with the corrupt file
+ignored.
+
+Rebuild / Skip?
+```
+
+If `Rebuild`: re-run the same `python -c "..."` Bash invocation above with an additional `force_rebuild_accumulator=True` keyword arg to `analyze()`. The fresh accumulator will be repopulated from this run's candidates. Replace the original analyzer output with the rebuild output.
+
+If `Skip`: continue with the corrupt-state warning logged; the analyzer's output already reflects an empty accumulator for this round.
+
+If `learned_patterns_schema_mismatch` or `learned_patterns_corrupted` warnings are present, log them but do NOT prompt — that file is human-editable and the user can fix it directly. The pipeline continues with empty learned patterns for this round.
+
+**Normal flow after warnings handling.**
+
+If `promotion_candidates` is non-empty, proceed to Stage 10c. If empty, skip 10c.
+
+If `warnings` is non-empty (including any rebuild-related markers), log them to the final completion summary at Stage 10d.
 
 If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised), log to state telemetry and continue silently. The run still completes; the analyzer just didn't update accumulator this round.
 ```
@@ -3060,8 +3196,8 @@ from pathlib import Path
 from state import acquire_state_lock
 
 with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
-    lp = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
-    acc = load_accumulator(Path('ACCUMULATOR_PATH'))
+    lp, _warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+    acc, _warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
     entry = next(e for e in acc.entries if e.pattern_id == 'PATTERN_ID')
     # Skip if already in learned_patterns (cross-file transaction recovery —
     # prior promotion wrote learned_patterns but failed to update accumulator)
@@ -3072,6 +3208,7 @@ with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
             body=entry.proposed_promotion_body,
             domain_tags=entry.domain_tags,
             target_stage=entry.target_stage,
+            category=entry.category,  # preserve for later demotion (Task 3.1 added this field)
             wins=0, losses=0,
             promoted_at=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
             demotion_count=entry.demotion_count,
@@ -3093,7 +3230,7 @@ from pathlib import Path
 from state import acquire_state_lock
 
 with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
-    acc = load_accumulator(Path('ACCUMULATOR_PATH'))
+    acc, _warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
     mark_rejected(acc, 'PATTERN_ID')
     save_accumulator(Path('ACCUMULATOR_PATH'), acc)
 "
@@ -3109,7 +3246,7 @@ from pathlib import Path
 from state import acquire_state_lock
 
 with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
-    acc = load_accumulator(Path('ACCUMULATOR_PATH'))
+    acc, _warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
     clear_promotion_pending(acc, 'PATTERN_ID')
     save_accumulator(Path('ACCUMULATOR_PATH'), acc)
 "
@@ -3227,12 +3364,13 @@ def test_full_lifecycle_civic_alpr(tmp_path):
         load_learned_patterns, save_learned_patterns, LearnedPattern
     )
     from datetime import datetime, timezone
-    acc = load_accumulator(acc_path)
-    lp = load_learned_patterns(lp_path)
+    acc, _ = load_accumulator(acc_path)
+    lp, _ = load_learned_patterns(lp_path)
     entry = next(e for e in acc.entries if e.pattern_id == civic_pid)
     lp.patterns.append(LearnedPattern(
         id=entry.pattern_id, name=entry.name, body=entry.proposed_promotion_body,
         domain_tags=entry.domain_tags, target_stage=entry.target_stage,
+        category=entry.category,
         wins=0, losses=0,
         promoted_at=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         demotion_count=entry.demotion_count,
@@ -3245,7 +3383,7 @@ def test_full_lifecycle_civic_alpr(tmp_path):
     for i in range(4, 8):
         case = _make_case(f"r{i}", ["civic", "alpr"], applied_patterns=[civic_pid])
         result = run_analyzer(case)
-    lp = load_learned_patterns(lp_path)
+    lp, _ = load_learned_patterns(lp_path)
     pattern = next(p for p in lp.patterns if p.id == civic_pid)
     assert pattern.wins >= 4, f"expected >=4 wins after runs 4-7, got {pattern.wins}"
 
@@ -3255,7 +3393,7 @@ def test_full_lifecycle_civic_alpr(tmp_path):
                           applied_patterns=[civic_pid],
                           confidence_per_topic={"t1": 0.4})
         result = run_analyzer(case)
-    lp = load_learned_patterns(lp_path)
+    lp, _ = load_learned_patterns(lp_path)
     pattern_in_lp = [p for p in lp.patterns if p.id == civic_pid]
     if pattern_in_lp:
         # ratio: 4 W / (4+5) = 0.44; not yet demoted (threshold is < 0.4)
@@ -3269,7 +3407,7 @@ def test_full_lifecycle_civic_alpr(tmp_path):
     assert result.demotions_applied >= 1
 
     # Verify pattern moved back to accumulator with raised_bar=True
-    acc = load_accumulator(acc_path)
+    acc, _ = load_accumulator(acc_path)
     pattern_in_acc = next((e for e in acc.entries if e.pattern_id == civic_pid), None)
     assert pattern_in_acc is not None, "demoted pattern should be in accumulator"
     assert pattern_in_acc.raised_bar is True
