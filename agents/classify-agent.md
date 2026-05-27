@@ -34,7 +34,7 @@ You will receive a `summaries` JSON object with this structure:
   - `source_type` -- one of: `government`, `journalism`, `academic`, `advocacy`, `other`
   - `key_entities` -- extracted names, orgs, legislation
   - `key_claims` -- notable factual assertions
-  - `media_refs` -- paths to downloaded media assets (may be empty)
+  - `media_refs` -- always an empty array in v3. Media flows via inline `![[path]]` embeds in the source article content (rewritten by `fetch_media.py` during Stage 4c), not via this structured list. Do NOT use this field to populate the output `media` array.
 
 Additional context:
 - `vault_root` -- absolute path to the Obsidian vault
@@ -157,7 +157,7 @@ Your entire response is a single JSON object. Rules:
       "tags": ["research", "surveillance", "greenville-sc"],
       "links": ["[[SC ALPR Overview]]", "[[Flock Safety]]"],
       "stub_links": ["[[SLED Plate Reader Program]]"],
-      "media": ["assets/greenville-alpr/alpr-report.pdf"],
+      "media": [],
       "priority": "primary"
     }
   ],
@@ -189,6 +189,6 @@ If no contradictions are found, return `"contradictions_detected": []`.
 - `write_model` must be `"sonnet"` or `"opus"`. Use `"opus"` only for `type: "synthesis"`.
 - `priority` is one of: `primary` (deep coverage), `secondary` (supporting), `scan` (brief mention)
 - `content_summary` is a concise description of what the write agent should produce -- not the full article content
-- `media` references assets downloaded in the media stage; may be empty
+- `media` -- always an empty array in v3. Media embeds are already inlined into the source article content via `fetch_media.py`'s rewrite, so the write stage picks them up directly from the source text. Kept in the output schema for backwards compatibility with v2 vault notes; future versions may remove it.
 - `folder_conventions` helps the write agent match existing style in the target folder
 - `contradictions_detected` is always present; an empty array means no contradictions were found across the batch

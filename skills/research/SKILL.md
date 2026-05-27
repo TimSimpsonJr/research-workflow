@@ -947,7 +947,8 @@ If any contradiction in `classification.contradictions_detected` references a so
 - If the target `folder` contains existing notes (from `vault_context`), match their section structure and style.
 
 **Media embeds:**
-- If the note's `media` list is non-empty, embed media assets using Obsidian syntax: `![[path/to/asset]]` at the appropriate point in the content.
+- Media embeds are already inlined into the source article content during Stage 4c (`fetch_media.py` rewrites the article body to include `![[path/to/asset]]` references in place). When composing the note body from the source content, preserve any `![[path]]` references found there -- do not strip them.
+- Do not add new embeds from the classification's `note.media` field; that field is empty by design in v3 (the manifest-based media flow was replaced by inline embeds). The field is retained in the classification schema for backwards compatibility with v2 vault notes only.
 
 **Content:**
 - For `create`: Write the complete note from scratch using the fetched source content and `content_summary` as your guide.
