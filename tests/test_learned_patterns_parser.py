@@ -154,6 +154,17 @@ def test_filter_by_topic_text_case_insensitive():
     assert len(relevant) == 1
 
 
+def test_filter_by_topic_text_empty_topics_returns_empty():
+    """Empty topics list returns empty match list (guard against false-positive
+    matches when no topic text is available)."""
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, filter_by_topic_text
+    f = LearnedPatternsFile(patterns=[
+        LearnedPattern(id="a", name="A", body="", domain_tags=["civic"],
+                       target_stage="search"),
+    ])
+    assert filter_by_topic_text(f, topics=[]) == []
+
+
 def test_filter_by_domain_overlap():
     """filter_relevant matches by exact domain_tags overlap. Used at Stage 10d
     when the case has its derived domain_tags available."""

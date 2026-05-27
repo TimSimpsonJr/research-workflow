@@ -210,8 +210,8 @@ def filter_by_topic_text(
     """Return patterns whose domain_tags appear as case-insensitive substrings
     in the joined topic text. Used at Stage 2 when formal domain_tags don't
     exist yet (v3.0.0 derives domain_tags only at case-write time from
-    written-note tags). Conservative on false positives — token-substring
-    only; no stemming or fuzzy matching."""
+    written-note tags). Plain substring match — no token boundaries, no
+    stemming, no fuzzy matching."""
     if not topics:
         return []
     joined = " ".join(topics).lower()
