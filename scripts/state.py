@@ -8,10 +8,12 @@ restart, and abandon flows. State lives in the vault at
 
 import json
 import shutil
+import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 CURRENT_RUN_FILE = "current_run.json"
+STATE_VERSION = 3
 
 
 def _atomic_write(path: Path, data: dict) -> None:
@@ -19,6 +21,11 @@ def _atomic_write(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+
+
+def save_state(state_dir: Path, run: dict) -> None:
+    """Save the active run state atomically. Public wrapper around _atomic_write."""
+    _atomic_write(state_dir / CURRENT_RUN_FILE, run)
 
 
 def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
@@ -42,7 +49,8 @@ def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
     run = {
         "run_id": run_id,
         "started_at": datetime.now(timezone.utc).isoformat(),
-        "stage": "resolve",
+        "stage": "triage",
+        "version": STATE_VERSION,
         "stage_progress": {},
         "tier_detected": tier,
         "plan_approved": False,

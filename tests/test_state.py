@@ -12,8 +12,25 @@ def test_create_run_writes_current_run(tmp_path):
     run = create_run(tmp_path, "sc-alpr", "mid")
     assert (tmp_path / "current_run.json").exists()
     assert run["run_id"] == "sc-alpr"
-    assert run["stage"] == "resolve"
+    assert run["stage"] == "triage"
     assert run["tier_detected"] == "mid"
+
+
+def test_state_version_constant():
+    from state import STATE_VERSION
+    assert STATE_VERSION == 3
+
+
+def test_create_run_writes_version(tmp_path):
+    from state import create_run
+    run = create_run(tmp_path, run_id="2026-05-26-test", tier="full")
+    assert run["version"] == 3
+
+
+def test_create_run_initial_stage_is_triage(tmp_path):
+    from state import create_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    assert run["stage"] == "triage"
 
 
 def test_create_run_fails_if_run_exists(tmp_path):
