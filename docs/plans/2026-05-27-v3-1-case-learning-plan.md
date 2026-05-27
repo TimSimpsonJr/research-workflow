@@ -559,8 +559,11 @@ def load_accumulator(path: Path) -> tuple[Accumulator, list[str]]:
     """Graceful load: returns (Accumulator, warnings). Never raises.
 
     On parse error or schema-version mismatch: logs to warnings, returns an
-    empty Accumulator. The analyzer surfaces warnings in AnalyzerResult so
-    Stage 10b can prompt the user to rebuild from cases if desired.
+    empty Accumulator. The analyzer propagates these warnings into
+    AnalyzerResult.warnings; the analyzer ALSO refuses to write back to a
+    file that loaded with warnings (see analyze()'s persist step). This keeps
+    user-recoverable corrupt state on disk so the user can inspect or
+    manually delete it to reset.
     """
     warnings: list[str] = []
     if not path.exists():
@@ -2501,26 +2504,25 @@ def analyze(
     accumulator_path: Path,
     learned_patterns_path: Path,
     cases_dir: Path,
-    cases_window: int | None = 20,
+    cases_window: int = 20,
     confidence_target: float = 0.75,
     promotion_threshold: int = 3,
     promotion_threshold_raised: int = 5,
     haiku_dispatch: Callable | None = None,
-    force_rebuild_accumulator: bool = False,
 ) -> AnalyzerResult:
-    """Run the analyzer at Stage 10b.
+    """Run the analyzer at Stage 10d.
 
     Returns AnalyzerResult listing promotion-eligible candidates and warnings.
-    Side effects: updates accumulator.json (atomic) and learned_patterns.md
-    (score updates + demotions).
+
+    Side effects: updates accumulator.json and learned_patterns.md
+    (atomic writes), BUT refuses to write either file if its load step
+    produced a corruption or schema-mismatch warning. This prevents silently
+    clobbering user-recoverable state with an empty file. The orchestrator
+    surfaces the warning text so the user can manually delete the corrupt
+    file when ready to reset that store.
 
     haiku_dispatch is an optional callable for semantic comparison. None means
     skip the semantic compare (conservative-distinct treatment).
-
-    force_rebuild_accumulator=True ignores the existing accumulator file entirely
-    and starts fresh. Stage 10b sets this when the user confirms a corrupt-state
-    rebuild prompt. The fresh accumulator gets repopulated from this run's
-    candidate detection; prior `rejected` flags are NOT preserved.
     """
     result = AnalyzerResult()
 
@@ -2531,12 +2533,8 @@ def analyze(
     case = json.loads(case_path.read_text(encoding="utf-8"))
 
     # Load state (both helpers return (data, warnings); warnings propagate to result)
-    if force_rebuild_accumulator:
-        accumulator = Accumulator()
-        result.warnings.append("accumulator_rebuilt_from_cases: prior rejected flags lost")
-    else:
-        accumulator, acc_warnings = load_accumulator(accumulator_path)
-        result.warnings.extend(acc_warnings)
+    accumulator, acc_warnings = load_accumulator(accumulator_path)
+    result.warnings.extend(acc_warnings)
     learned, lp_warnings = load_learned_patterns(learned_patterns_path)
     result.warnings.extend(lp_warnings)
 
@@ -2646,26 +2644,34 @@ def analyze(
             mark_promotion_pending(accumulator, entry.pattern_id)
             result.promotion_candidates.append(entry)
 
-    # 6. Persist — write order: learned_patterns FIRST, then accumulator.
-    #    If the accumulator write fails after learned_patterns succeeded, the next
-    #    run's analyzer dedupes via the in-learned_patterns check (no double-graduation).
-    #    The reverse order would risk losing graduations.
-    save_learned_patterns(learned_patterns_path, learned)
-    save_accumulator(accumulator_path, accumulator)
+    # 6. Persist selectively — refuse to clobber files that loaded with warnings.
+    #    Write order when both are written: learned_patterns FIRST, then accumulator
+    #    (if the accumulator write fails after learned_patterns succeeded, the next
+    #    run's analyzer dedupes via the in-learned_patterns check — no double-graduation;
+    #    the reverse order would risk losing graduations).
+    acc_corrupt = any(
+        w.startswith("accumulator_corrupted") or w.startswith("accumulator_schema_mismatch")
+        for w in result.warnings
+    )
+    lp_corrupt = any(
+        w.startswith("learned_patterns_corrupted") or w.startswith("learned_patterns_schema_mismatch")
+        for w in result.warnings
+    )
+    if not lp_corrupt:
+        save_learned_patterns(learned_patterns_path, learned)
+    if not acc_corrupt:
+        save_accumulator(accumulator_path, accumulator)
 
     return result
 
 
-def _load_recent_cases(cases_dir: Path, window: int | None) -> list[dict]:
-    """Load up to `window` most recent case JSON files. Pass window=None to
-    scan the full case history (used by Stage 10d's rebuild path)."""
+def _load_recent_cases(cases_dir: Path, window: int) -> list[dict]:
+    """Load up to `window` most recent case JSON files."""
     if not cases_dir.exists():
         return []
     case_files = sorted(cases_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
-    if window is not None:
-        case_files = case_files[:window]
     out = []
-    for cf in case_files:
+    for cf in case_files[:window]:
         try:
             out.append(json.loads(cf.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError) as e:
@@ -3349,40 +3355,39 @@ print(json.dumps({
 
 Parse the JSON output.
 
-**Corrupt-state rebuild prompt.** Scan `warnings` for `accumulator_corrupted:` OR `accumulator_schema_mismatch:` markers. If either is present:
+**Corruption handling (v3.1.0 policy: no automatic recovery, no rebuild UX).**
 
-Show the user:
+`analyze()` itself protects state files: if `accumulator.json` or `learned_patterns.md` could not be parsed (or had a schema-version mismatch), the analyzer **does not write back to that file**. So a corrupt file stays as-is on disk — the user can inspect or recover it. The trade-off is that any in-memory updates (score increments, new candidates, demotion sweep results) that would have touched the corrupted store are discarded for this run.
+
+If `warnings` contains any of these markers:
+- `accumulator_corrupted: ...`
+- `accumulator_schema_mismatch: ...`
+- `learned_patterns_corrupted: ...`
+- `learned_patterns_schema_mismatch: ...`
+
+Surface them to the user at Stage 10d output (these flow through to Stage 10's completion summary anyway via state telemetry), with a clear advisory:
 
 ```
-Your accumulator file is unusable for this run:
+⚠️  v3.1.0 pattern learning state was not updated this run:
+  {warning text(s) from analyzer}
 
-  {warning text from analyzer}
-
-Rebuild it now by re-running heuristic detection over your FULL case history?
-This loses any previously-rejected pattern flags (you'll need to re-reject
-them as they re-emerge). Skip to continue this run with the file ignored.
-
-Rebuild / Skip?
+To reset the affected store, delete the file manually:
+  {VAULT}/.research-workflow/accumulator.json
+  {VAULT}/.research-workflow/learned_patterns.md
+The next /research run will start with an empty store and rebuild from
+new cases going forward. Existing case history at
+{VAULT}/.research-workflow/cases/ is unaffected.
 ```
 
-If `Rebuild`: re-run the same `python -c "..."` Bash invocation above with TWO additional keyword args:
+(There is no in-pipeline rebuild flow in v3.1.0. Corrupt-state recovery is rare; the simpler "user deletes file → fresh start" path was preferred over carrying the complexity of a rebuild-from-history mechanism. Revisit in v3.1.x if real usage shows this is too coarse.)
 
-- `force_rebuild_accumulator=True` — start the analyzer with an empty accumulator
-- `cases_window=None` — scan ALL cases on disk (not the rolling window of recent N)
-
-Replace the original analyzer output with the rebuild output. The accumulator is rewritten from scratch; rejected-flag history is intentionally lost.
-
-If `Skip`: continue with the warning logged; the analyzer's output already reflects an empty accumulator for this round.
-
-**learned_patterns.md corruption — different policy.** If `learned_patterns_schema_mismatch` or `learned_patterns_corrupted` warnings are present, log them but do NOT prompt the user. That file is human-readable; the user can fix it directly with an editor. The pipeline continues with empty learned patterns for this round.
-
-**CRITICAL — guard Stage 10e against silent learned_patterns clobbering.** If `learned_patterns_corrupted` or `learned_patterns_schema_mismatch` is in `warnings`, SKIP Stage 10e entirely for this run — even if promotion candidates were found. Promoting under a corrupt/incompatible file would save an empty file with only the new entry, destroying user data. Log: "Skipping graduation prompts — learned_patterns.md needs manual repair first."
+**Stage 10e gating.** If any `learned_patterns_*` warning is present, **skip Stage 10e entirely for this run** — even if `promotion_candidates` is non-empty. Stage 10e's promote path would otherwise be unable to write the graduated pattern (analyzer refused the write). Log: "Skipping graduation prompts — learned_patterns.md needs manual repair first."
 
 **Normal flow after warnings handling.**
 
 If `promotion_candidates` is non-empty AND no `learned_patterns_*` warnings, proceed to Stage 10e. Otherwise skip 10e.
 
-If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised), log to state telemetry and continue silently. The run still completes; the analyzer just didn't update accumulator this round.
+If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised), log to state telemetry and continue silently. The run still completes; the analyzer just didn't update state this round.
 ```
 
 **Step 2: Commit**
