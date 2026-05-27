@@ -154,7 +154,135 @@ If `state.load_run()` returned None and the user just ran /research (no other re
 
 ---
 
-## Stage 2: Resolve
+## Stage 2: Triage
+
+The resolver classifies the prompt's strategy before resolving topics. The run is created at the START of this stage so that any downstream state-writing helper (`save_state`, `record_hop`, `add_usage`, etc.) has somewhere to write to -- even when the planning_only path bypasses Stage 3's full approval flow.
+
+### 2a. Create the run
+
+Generate a run ID from the current date and a slugified version of the user's input (e.g., `2026-03-05-sc-alpr-research`). Then:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import create_run
+from pathlib import Path
+r = create_run(Path('STATE_DIR'), 'RUN_ID', 'TIER')
+print(json.dumps(r))
+"
+```
+
+The run begins with no topics; topics are populated after the resolver returns (in 2c.iv or Stage 3).
+
+### 2b. Dispatch topic-resolver agent (Sonnet)
+
+Read the agent definition: `REPO/agents/topic-resolver.md`
+
+Dispatch via the Task tool:
+- `subagent_type`: `general-purpose`
+- `model`: `sonnet`
+- `prompt`: The full contents of `agents/topic-resolver.md`, followed by a `---` separator, followed by:
+
+```
+prompt: {the user's original input}
+vault_root: {VAULT}
+scripts_dir: {SCRIPTS}
+```
+
+### 2c. Parse strategy and persist it
+
+The agent returns a JSON object. Read the top-level `strategy` field.
+
+**Persist the strategy immediately** -- every path through Stage 2 ends up needing `run["strategy"]` set, so save it before branching. (`intent_planning` runs may re-dispatch in 2d and produce a different strategy; that re-dispatch overwrites this value.)
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+run['strategy'] = 'STRATEGY_VALUE_FROM_RESOLVER'
+save_state(Path('STATE_DIR'), run)
+"
+```
+
+Then branch by strategy:
+
+- `planning_only`: continue to Stage 2e (one-line confirm) with the resolved topics from this response.
+- `intent_planning`: continue to Stage 2d (Q&A loop).
+- `unified`: continue to Stage 3 (full resolve+plan flow with depth column). Note: the resolver has ALREADY produced topics; Stage 3 uses them rather than re-dispatching.
+
+### 2d. Intent-planning Q&A (if applicable)
+
+If strategy is `intent_planning`, the response contains `clarifying_questions[]` and topics are not yet resolved. For each question (max 3 for single-topic, max 1 for batch):
+
+1. Present the question to the user.
+2. Wait for the user's response.
+3. Append the answer to the running prompt context.
+
+After all questions are answered, re-dispatch the topic-resolver with the augmented prompt:
+
+```
+prompt: {original input}
+clarifying_qa: {array of {question, answer} pairs}
+vault_root: {VAULT}
+scripts_dir: {SCRIPTS}
+```
+
+Expect the new response to have `strategy: "unified"` (rare cases: `planning_only`).
+
+**Re-persist the strategy from the second response.** The first dispatch persisted `"intent_planning"` in 2c; that value is now stale because the clarified resolver may have returned a different strategy.
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+run['strategy'] = 'NEW_STRATEGY_FROM_SECOND_DISPATCH'
+save_state(Path('STATE_DIR'), run)
+"
+```
+
+Then continue to 2e or Stage 3 accordingly.
+
+If the user abandons mid-Q&A (cancel / explicit abort), call `abandon_run(STATE_DIR)` and stop.
+
+### 2e. Planning-only confirm (skip if strategy is unified)
+
+Only entered when strategy is `planning_only`. Show the user:
+
+```
+Researching {project} at depth {topic.depth}, ~{estimated_minutes}min. Proceed? [yes / edit / cancel]
+```
+
+- `yes`: initialize topics from the resolver response (see snippet below), then skip to Stage 4 (hop loop). Stage 3 is bypassed. Strategy was already persisted in 2c.
+- `edit`: upgrade to `unified` strategy -- present the full plan as in Stage 3d below. The run is already created; Stage 3 will populate topics and approve. Also overwrite `run['strategy'] = 'unified'` since the user chose to upgrade.
+- `cancel`: call `abandon_run(STATE_DIR)` and stop.
+
+When `yes`: initialize topics now (since Stage 3 is being skipped):
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state, init_topic
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+plan_topics = RESOLVER_RESPONSE['topics']
+run['topics'] = [init_topic(t['topic'], t['mode'], t['depth']) for t in plan_topics]
+save_state(Path('STATE_DIR'), run)
+"
+```
+
+Note: strategy persistence now happens once in Stage 2c (immediately after the resolver returns), so every path through Stage 2 ends with `run["strategy"]` set. No separate 2f step needed.
+
+---
+
+## Stage 3: Resolve
 
 ### 2a. Create a new run
 
