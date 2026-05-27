@@ -319,7 +319,7 @@ def process_urls(
             failed.append({
                 "url": url,
                 "error": str(exc),
-                "attempts": ["jina", "wayback"],
+                "attempts": ["jina", "wayback", "playwright"],
             })
 
     return fetched, failed
@@ -359,7 +359,7 @@ def _fetch_single(url_item: dict, cache_dir: Path, ttl_days: int,
             "fetched_at": now, "word_count": len(content.split()),
         }, None
     except Exception as exc:
-        return None, {"url": url, "error": str(exc), "attempts": ["jina", "wayback"]}
+        return None, {"url": url, "error": str(exc), "attempts": ["jina", "wayback", "playwright"]}
 
 
 def process_urls_parallel(
