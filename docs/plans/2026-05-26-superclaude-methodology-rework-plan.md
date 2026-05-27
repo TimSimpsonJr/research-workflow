@@ -3095,15 +3095,17 @@ For each active topic, choose hop_context based on how the topic got admitted at
   - `from`: `topic.next_hop.from`
   - `seen_urls`: the topic's seen_urls list
 
-  After dispatching the search, call `set_next_hop(topic, None)` to clear the consumed direction (the upcoming hop-planner response will set a new one if continuing).
+  **Do not clear `next_hop` here.** Stage 4e will overwrite it (or set it to None on stop/replan) when the new hop-planner response lands. Clearing eagerly in 4a would leave the in-flight hop with no routing state if the process crashes between 4a and 4e — resume could not reconstruct `hop_context`.
 
-- **Hop following a quality-gate replan (Stage 5b or 5c re-admission):** the topic has a stored `replan_hint` instead of a prior `next_hop`. Use the hint's fields:
+- **Hop following a quality-gate replan (Stage 5b or 5c re-admission):** the topic has a stored `replan_hint` instead of a prior `next_hop`. Read it (don't clear):
   - `pattern`: `topic.replan_hint.suggested_pattern`
   - `from`: `topic.replan_hint.suggested_query_focus` (treated as the focus topic/entity for the search)
   - `seen_urls`: the topic's seen_urls list
   - Optional: include the `issue` field as a brief addition to the preamble (e.g., "previous gap: thin sources")
 
-  After consuming `replan_hint`, the orchestrator clears it via `set_replan_hint(topic, None)` so subsequent continue hops don't re-trigger the same focus.
+  **Do not clear `replan_hint` here either.** Stage 4e's continue branch is the one place that clears it (via `set_replan_hint(topic, None)`); the stop and replan branches leave it alone or overwrite it. This keeps the hop's routing context durable across crashes.
+
+**Routing precedence for Stage 4a:** when both `next_hop` and `replan_hint` are set (shouldn't happen in normal operation but possible after partial fixes), prefer `replan_hint` — it's the more recent quality-gate intent. Stage 4e's continue branch handles the cleanup by clearing `replan_hint` once a hop completes successfully, so the precedence collision is short-lived.
 
 The search-agent's prompt template doesn't change. The orchestrator prepends a hop-context preamble for hop 2+:
 
