@@ -149,12 +149,23 @@ def increment_replan(state_dir: Path) -> None:
     save_state(state_dir, run)
 
 
+_RESERVED_DECISION_KEYS = {"decision", "at"}
+
+
 def record_user_decision(state_dir: Path, decision: str, **details) -> None:
     """Append a user-decision entry to the run's user_decisions log.
 
     Extra details (e.g., confidence, reason) are merged into the entry alongside
     the decision label and timestamp. Silently no-ops if no active run.
+
+    Raises TypeError if `details` contains reserved keys ("decision", "at") —
+    those would silently override the canonical fields via dict-spread order.
     """
+    reserved = _RESERVED_DECISION_KEYS & details.keys()
+    if reserved:
+        raise TypeError(
+            f"record_user_decision: details cannot contain reserved keys: {sorted(reserved)}"
+        )
     run = load_run(state_dir)
     if run is None:
         return
@@ -166,18 +177,27 @@ def record_user_decision(state_dir: Path, decision: str, **details) -> None:
     save_state(state_dir, run)
 
 
+_KNOWN_USAGE_MODELS = {"haiku", "sonnet", "opus", "ollama"}
+
+
 def add_usage(state_dir: Path, model: str, in_tokens: int, out_tokens: int, stage: str) -> None:
     """Increment per-model usage counters for the active run.
 
-    Safe against missing buckets and missing keys (the ollama bucket has no
-    token fields by design — local inference has no token cost). Uses
-    dict.get(key, 0) + rather than += so the ollama bucket doesn't KeyError.
-    Silently no-ops if there is no active run (telemetry shouldn't block
-    the pipeline).
+    Safe against missing keys on the ollama bucket (which lacks token fields by
+    design — local inference has no token cost). Uses dict.get(key, 0) + rather
+    than += to keep ollama incrementing safely. Silently no-ops if there is no
+    active run (telemetry shouldn't block the pipeline).
+
+    Raises ValueError on unknown model names — prevents typos like "haku" from
+    silently creating ghost buckets that would distort cost estimates.
 
     `stage` is currently unused but kept in the signature for future
     per-stage breakdown.
     """
+    if model not in _KNOWN_USAGE_MODELS:
+        raise ValueError(
+            f"add_usage: unknown model {model!r}; expected one of {sorted(_KNOWN_USAGE_MODELS)}"
+        )
     run = load_run(state_dir)
     if run is None:
         return
@@ -203,9 +223,10 @@ def apply_hop_decision(
 
     Combines record_hop + set_next_hop + set_replan_hint + mark_topic_status
     + append_confidence + set_contradiction_rate into a single
-    load -> mutate -> save cycle so a crash mid-transition cannot leave the
-    topic with partial state — e.g., hop recorded but quality signals stale,
-    or status updated but next_hop relative to the just-completed hop.
+    load -> mutate -> save cycle. On disk, the transition is all-or-nothing
+    (the single save_state at the end writes atomically via temp+rename).
+    A crash mid-function — before save_state runs — discards the entire
+    transition; resume re-runs the hop from its prior on-disk state.
 
     `decision` is one of: "continue", "stop", "early_terminated", "replan".
 

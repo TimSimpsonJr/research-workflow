@@ -375,6 +375,28 @@ def test_record_user_decision(tmp_path):
     assert "at" in decisions[0]
 
 
+def test_record_user_decision_rejects_reserved_keys(tmp_path):
+    """Caller-supplied 'decision' or 'at' in **details would silently override canonical fields."""
+    import pytest
+    from state import create_run, save_state, record_user_decision
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    save_state(tmp_path, run)
+
+    with pytest.raises(TypeError, match="reserved keys"):
+        record_user_decision(tmp_path, decision="continue", at="2020-01-01T00:00:00Z")
+
+
+def test_add_usage_rejects_unknown_model(tmp_path):
+    """Typos in model name (e.g. 'haku') would create ghost buckets — guard at the call site."""
+    import pytest
+    from state import create_run, save_state, add_usage
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    save_state(tmp_path, run)
+
+    with pytest.raises(ValueError, match="unknown model"):
+        add_usage(tmp_path, model="haku", in_tokens=100, out_tokens=10, stage="search")
+
+
 def test_abandon_run_sweeps_hop_intermediate_files(tmp_path):
     from state import create_run, abandon_run
     create_run(tmp_path, run_id="2026-05-26-hop-test", tier="full")
