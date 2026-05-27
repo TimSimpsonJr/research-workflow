@@ -212,9 +212,9 @@ save_state(Path('STATE_DIR'), run)
 
 Then branch by strategy:
 
-- `planning_only`: continue to Stage 2e (one-line confirm) with the resolved topics from this response.
+- `planning_only`: continue to Stage 2e (one-line confirm) with the resolved topics from this response, then Stage 2f.
 - `intent_planning`: continue to Stage 2d (Q&A loop).
-- `unified`: continue to Stage 3 (full resolve+plan flow with depth column). Note: the resolver has ALREADY produced topics; Stage 3 uses them rather than re-dispatching.
+- `unified`: continue to Stage 3 (full resolve+plan flow with depth column), then Stage 2f before Stage 4. Note: the resolver has ALREADY produced topics; Stage 3 uses them rather than re-dispatching.
 
 ### 2d. Intent-planning Q&A (if applicable)
 
@@ -261,7 +261,7 @@ Only entered when strategy is `planning_only`. Show the user:
 Researching {project} at depth {topic.depth}, ~{estimated_minutes}min. Proceed? [yes / edit / cancel]
 ```
 
-- `yes`: initialize topics from the resolver response (see snippet below), then skip to Stage 4 (hop loop). Stage 3 is bypassed. Strategy was already persisted in 2c.
+- `yes`: initialize topics from the resolver response (see snippet below), then run Stage 2f, then skip to Stage 4 (hop loop). Stage 3 is bypassed. Strategy was already persisted in 2c.
 - `edit`: upgrade to `unified` strategy -- present the full plan as in Stage 3a below. The run is already created; Stage 3 will populate topics and approve. Also overwrite `run['strategy'] = 'unified'` since the user chose to upgrade.
 - `cancel`: call `abandon_run(STATE_DIR)` and stop.
 
@@ -286,6 +286,8 @@ update_stage(state_dir, 'hop_loop')
 Note: strategy persistence now happens once in Stage 2c (immediately after the resolver returns), so every path through Stage 2 ends with `run["strategy"]` set.
 
 ### 2f. Load learned patterns (v3.1.0)
+
+**When to run:** Once per /research invocation, after Stage 2 has selected a strategy and Stage 3 has produced the resolved topics list. Every path through Stage 2 (planning_only via 2e, intent_planning via 2d->2e, unified via Stage 3) must run Stage 2f BEFORE entering Stage 4 -- Stage 4a/4e and Stage 6 rely on `LEARNED_BY_STAGE` being populated by 2f. If you got here from 2e's `yes` branch, run 2f next, then enter Stage 4. If you got here from Stage 3b, run 2f, then enter Stage 4.
 
 Run via Bash:
 
@@ -393,6 +395,8 @@ save_stage_output(state_dir, 'research_plan', PLAN_JSON)
 ```
 
 Where `PLAN_JSON` is the parsed JSON from the resolver, serialized as a Python dict literal.
+
+Run Stage 2f before entering Stage 4.
 
 ---
 
