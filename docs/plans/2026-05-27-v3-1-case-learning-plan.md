@@ -54,7 +54,7 @@
 ### Task 1.1: Add `applied_patterns` field to run state schema
 
 **Files:**
-- Modify: `scripts/state.py` (the `init_run` function and schema constants)
+- Modify: `scripts/state.py` (the `create_run` function — this is the actual run-creation entry point in v3.0.0; there is no `init_run`)
 - Test: `tests/test_state.py`
 
 **Step 1: Write the failing test**
@@ -62,29 +62,32 @@
 Add to `tests/test_state.py`:
 
 ```python
-def test_init_run_has_empty_applied_patterns(tmp_path):
+def test_create_run_has_empty_applied_patterns(tmp_path):
     """v3.1.0 runs initialize with an empty applied_patterns list."""
-    from state import init_run, load_run
-    run = init_run(tmp_path, run_id="test-v31-applied", topics=["topic A"], strategy="planning_only")
+    from state import create_run, load_run
+    run = create_run(tmp_path, run_id="test-v31-applied", tier="base")
     assert "applied_patterns" in run
     assert run["applied_patterns"] == []
+    # Round-trip via load_run too
+    persisted = load_run(tmp_path)
+    assert persisted["applied_patterns"] == []
 ```
 
 **Step 2: Run test to verify it fails**
 
 ```
-pytest tests/test_state.py::test_init_run_has_empty_applied_patterns -v
+pytest tests/test_state.py::test_create_run_has_empty_applied_patterns -v
 ```
 Expected: FAIL with `KeyError: 'applied_patterns'` or `assert 'applied_patterns' in {...}`.
 
-**Step 3: Add the field to `init_run`**
+**Step 3: Add the field to `create_run`**
 
-In `scripts/state.py`, find `init_run()` and add `applied_patterns: []` to the returned run dict. Place it near `usage` and `replan_count` for consistency.
+In `scripts/state.py`, find the `create_run()` function (look for `def create_run(state_dir: Path, run_id: str, tier: str) -> dict:` — around line 362 in the v3.0.0 codebase) and add `"applied_patterns": [],` to the run dict it builds. Place it near `"usage"` and the per-run telemetry fields for consistency. The function persists the dict via `_atomic_write` already; no additional save call needed.
 
 **Step 4: Run test to verify pass**
 
 ```
-pytest tests/test_state.py::test_init_run_has_empty_applied_patterns -v
+pytest tests/test_state.py::test_create_run_has_empty_applied_patterns -v
 ```
 Expected: PASS.
 
@@ -92,7 +95,7 @@ Expected: PASS.
 
 ```bash
 git add scripts/state.py tests/test_state.py
-git commit -m "feat(state): add applied_patterns field to run state schema"
+git commit -m "feat(state): add applied_patterns field to create_run dict"
 ```
 
 ---
@@ -108,8 +111,8 @@ git commit -m "feat(state): add applied_patterns field to run state schema"
 ```python
 def test_record_applied_pattern_appends_unique(tmp_path):
     """record_applied_pattern adds a pattern_id; duplicates are no-ops."""
-    from state import init_run, record_applied_pattern, load_run
-    init_run(tmp_path, run_id="t", topics=["a"], strategy="planning_only")
+    from state import create_run, record_applied_pattern, load_run
+    create_run(tmp_path, run_id="t", tier="base")
     record_applied_pattern(tmp_path, "civic-alpr-t1-dominance-3f7a")
     record_applied_pattern(tmp_path, "tech-entity-h2-9c2b")
     record_applied_pattern(tmp_path, "civic-alpr-t1-dominance-3f7a")  # dup
@@ -1398,19 +1401,51 @@ git commit -m "feat(learned_patterns): tolerant markdown parser with skip-on-mal
 
 ---
 
-### Task 3.3: Filter helpers (by domain_tags / target_stage)
+### Task 3.3: Filter helpers (by topic text / by domain_tags / by target_stage)
 
 **Files:**
 - Modify: `scripts/learned_patterns.py`
 - Test: `tests/test_learned_patterns_parser.py`
 
-The orchestrator at Stage 2 needs to filter patterns by domain_tags overlap with the run's prompt, and group them by target_stage. Provide these helpers.
+The orchestrator needs two filter modes:
+
+- **`filter_by_topic_text`** — used at Stage 2 BEFORE `domain_tags` exist. The current v3.0.0 pipeline derives `domain_tags` only at case-write time (Stage 10, from the most common tags across written notes — see `skills/research/SKILL.md:1250` and surrounding context). At Stage 2 the orchestrator only has topic strings from the resolver output. This helper does case-insensitive substring / token-overlap matching of each pattern's `domain_tags` against the joined topic text. Patterns whose tags appear anywhere in the topic text are considered relevant.
+- **`filter_relevant`** — used at Stage 10b when a case's `domain_tags` ARE available (derived from written notes). Same overlap-with-tags shape, but exact tag matching rather than fuzzy text.
+- **`group_by_stage`** — partitions a list of patterns by `target_stage`.
 
 **Step 1: Write failing tests**
 
 ```python
+def test_filter_by_topic_text_substring_match():
+    """filter_by_topic_text matches patterns whose domain_tags appear as
+    case-insensitive substrings in the joined topic text. Used at Stage 2
+    where formal domain_tags don't yet exist."""
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, filter_by_topic_text
+    f = LearnedPatternsFile(patterns=[
+        LearnedPattern(id="a", name="A", body="", domain_tags=["civic", "alpr"],
+                       target_stage="search"),
+        LearnedPattern(id="b", name="B", body="", domain_tags=["tech"],
+                       target_stage="search"),
+        LearnedPattern(id="c", name="C", body="", domain_tags=["civic"],
+                       target_stage="hop_planner"),
+    ])
+    relevant = filter_by_topic_text(f, topics=["ALPR programs in Greenville"])
+    assert {p.id for p in relevant} == {"a", "c"}
+
+
+def test_filter_by_topic_text_case_insensitive():
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, filter_by_topic_text
+    f = LearnedPatternsFile(patterns=[
+        LearnedPattern(id="a", name="A", body="", domain_tags=["Civic"],
+                       target_stage="search"),
+    ])
+    relevant = filter_by_topic_text(f, topics=["alpr in CIVIC contexts"])
+    assert len(relevant) == 1
+
+
 def test_filter_by_domain_overlap():
-    """filter_relevant returns only patterns whose domain_tags overlap with run tags."""
+    """filter_relevant matches by exact domain_tags overlap. Used at Stage 10b
+    when the case has its derived domain_tags available."""
     from learned_patterns import LearnedPatternsFile, LearnedPattern, filter_relevant
     f = LearnedPatternsFile(patterns=[
         LearnedPattern(id="a", name="A", body="", domain_tags=["civic", "alpr"],
@@ -1441,7 +1476,7 @@ def test_group_by_target_stage():
 **Step 2: Verify failure**
 
 ```
-pytest tests/test_learned_patterns_parser.py -k "filter_relevant or group_by_stage" -v
+pytest tests/test_learned_patterns_parser.py -k "filter_by_topic_text or filter_relevant or group_by_stage" -v
 ```
 Expected: FAIL.
 
@@ -1450,12 +1485,32 @@ Expected: FAIL.
 Add to `scripts/learned_patterns.py`:
 
 ```python
+def filter_by_topic_text(
+    file: LearnedPatternsFile,
+    *,
+    topics: list[str],
+) -> list[LearnedPattern]:
+    """Return patterns whose domain_tags appear as case-insensitive substrings
+    in the joined topic text. Used at Stage 2 when formal domain_tags don't
+    exist yet (v3.0.0 derives domain_tags only at case-write time from
+    written-note tags). Conservative on false positives — token-substring
+    only; no stemming or fuzzy matching."""
+    if not topics:
+        return []
+    joined = " ".join(topics).lower()
+    return [
+        p for p in file.patterns
+        if any(tag.lower() in joined for tag in p.domain_tags)
+    ]
+
+
 def filter_relevant(
     file: LearnedPatternsFile,
     *,
     run_domain_tags: list[str],
 ) -> list[LearnedPattern]:
-    """Return patterns whose domain_tags overlap with run_domain_tags."""
+    """Return patterns whose domain_tags overlap with run_domain_tags.
+    Used at Stage 10b when the case has its derived domain_tags available."""
     run_set = set(run_domain_tags)
     return [p for p in file.patterns if run_set & set(p.domain_tags)]
 
@@ -1472,15 +1527,15 @@ def group_by_stage(patterns: list[LearnedPattern]) -> dict[str, list[LearnedPatt
 **Step 4: Verify pass**
 
 ```
-pytest tests/test_learned_patterns_parser.py -k "filter_relevant or group_by_stage" -v
+pytest tests/test_learned_patterns_parser.py -k "filter_by_topic_text or filter_relevant or group_by_stage" -v
 ```
-Expected: PASS (2 tests).
+Expected: PASS (4 tests).
 
 **Step 5: Commit**
 
 ```bash
 git add scripts/learned_patterns.py tests/test_learned_patterns_parser.py
-git commit -m "feat(learned_patterns): filter_relevant + group_by_stage helpers"
+git commit -m "feat(learned_patterns): filter_by_topic_text + filter_relevant + group_by_stage"
 ```
 
 ---
@@ -1607,10 +1662,15 @@ def _short_hash(s: str) -> str:
     return hashlib.sha256(s.encode("utf-8")).hexdigest()[:4]
 
 
-def _make_pattern_id(domain_slug: str, category: str, name: str, created_at: str) -> str:
+def _make_pattern_id(domain_slug: str, category: str, stable_key: str) -> str:
+    """Deterministic pattern_id. `stable_key` MUST be the same string for the
+    same underlying observation across runs (e.g., the dominant tier name,
+    the winning hop pattern name, the templatized query). Do NOT pass
+    timestamps or other per-run values — those break sessions_seen accumulation.
+    """
     safe_domain = domain_slug.replace("/", "-").replace(" ", "-").lower()
     safe_cat = category.replace("_", "-").lower()
-    return f"{safe_domain}-{safe_cat}-{_short_hash(name + created_at)}"
+    return f"{safe_domain}-{safe_cat}-{_short_hash(stable_key)}"
 
 
 def detect_source_tier_dominance(
@@ -1632,8 +1692,6 @@ def detect_source_tier_dominance(
         by_domain[key].append(case)
 
     candidates = []
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).isoformat()
 
     for domain_tags, domain_cases in by_domain.items():
         if len(domain_cases) < min_cases:
@@ -1667,7 +1725,8 @@ def detect_source_tier_dominance(
             }
             for c in domain_cases
         ]
-        pid = _make_pattern_id(domain_slug, "source-tier-bias", name, now)
+        # stable_key is the dominant tier name — recurs identically across runs
+        pid = _make_pattern_id(domain_slug, "source-tier-bias", dominant_tier)
         candidates.append({
             "pattern_id": pid,
             "name": name,
@@ -1759,8 +1818,6 @@ def detect_hop_pattern_lift(
         by_domain[key].append(case)
 
     candidates = []
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).isoformat()
 
     for domain_tags, domain_cases in by_domain.items():
         if len(domain_cases) < min_cases:
@@ -1794,7 +1851,8 @@ def detect_hop_pattern_lift(
             }
             for c in domain_cases
         ]
-        pid = _make_pattern_id(domain_slug, "hop-pattern-bias", name, now)
+        # stable_key is the winning hop-pattern name — recurs identically across runs
+        pid = _make_pattern_id(domain_slug, "hop-pattern-bias", winning_pattern)
         candidates.append({
             "pattern_id": pid,
             "name": name,
@@ -1873,9 +1931,6 @@ def detect_query_template_recurrence(
     min_recurrence: int = 3,
 ) -> list[dict]:
     """Detect query templates that recur across cases as queries that worked."""
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).isoformat()
-
     by_domain_template: dict[tuple, list[dict]] = defaultdict(list)
     for case in cases:
         domain = tuple(sorted(case.get("domain_tags", [])))
@@ -1904,7 +1959,8 @@ def detect_query_template_recurrence(
             {"case_id": inst["case_id"], "signal": f"raw_query={inst['raw_query']!r}"}
             for inst in instances
         ]
-        pid = _make_pattern_id(domain_slug, "query-template", template, now)
+        # stable_key is the templatized query — recurs identically across runs
+        pid = _make_pattern_id(domain_slug, "query-template", template)
         candidates.append({
             "pattern_id": pid,
             "name": name,
@@ -2462,9 +2518,12 @@ def analyze(
             mark_promotion_pending(accumulator, entry.pattern_id)
             result.promotion_candidates.append(entry)
 
-    # 6. Persist
-    save_accumulator(accumulator_path, accumulator)
+    # 6. Persist — write order: learned_patterns FIRST, then accumulator.
+    #    If the accumulator write fails after learned_patterns succeeded, the next
+    #    run's analyzer dedupes via the in-learned_patterns check (no double-graduation).
+    #    The reverse order would risk losing graduations.
     save_learned_patterns(learned_patterns_path, learned)
+    save_accumulator(accumulator_path, accumulator)
 
     return result
 
@@ -2571,9 +2630,7 @@ Spec + code-quality.
 "Verify analyze() matches design Section 4 (Data flow) — score updates → demotion sweep → candidate detection → accumulator updates → promotion eligibility → atomic save."
 
 **Code quality:**
-"Review the wiring: any state path that doesn't get persisted on crash? Atomic save ordering correct (learned_patterns first or accumulator first)? Note: write order should be learned_patterns FIRST per design Section 7."
-
-If review identifies the write-order issue (yes, it should — current code saves accumulator then learned_patterns), fix in a follow-up commit before Phase 7.
+"Review the wiring: any state path that doesn't get persisted on crash? Confirm the save order is learned_patterns FIRST then accumulator per design Section 7 — the task ships this order already; flag any regression."
 
 ---
 
@@ -2799,16 +2856,18 @@ Run via Bash:
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from learned_patterns import load_learned_patterns, filter_relevant, group_by_stage
+from learned_patterns import load_learned_patterns, filter_by_topic_text, group_by_stage
 from pathlib import Path
 lp = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
-relevant = filter_relevant(lp, run_domain_tags=DOMAIN_TAGS)
+relevant = filter_by_topic_text(lp, topics=TOPIC_STRINGS)
 grouped = group_by_stage(relevant)
 print(json.dumps({stage: [p.id for p in patterns] for stage, patterns in grouped.items()}))
 "
 ```
 
-Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`. Substitute `DOMAIN_TAGS` with the run's domain_tags list (from Stage 2 triage output).
+Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`. Substitute `TOPIC_STRINGS` with the list of topic strings from the resolver output (Stage 3's `final['topics']` — use each topic's `topic` field).
+
+**Why topic-text matching, not `domain_tags` matching at this stage:** v3.0.0 only derives `domain_tags` at case-write time (Stage 10), computed from tags assigned to written notes. At Stage 2 no notes exist yet. Topic strings are the strongest signal we have for relevance. Stage 10b's analyzer uses real `domain_tags` from the just-written case via `filter_relevant`.
 
 Parse the JSON output and store:
 - `LEARNED_BY_STAGE` = the returned dict mapping `search` / `hop_planner` / `classify` → list of pattern IDs
@@ -2985,6 +3044,8 @@ Promote / Reject / Hold?
 
 Use the user's response:
 
+All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10b uses — without it, concurrent `/research` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
+
 **Promote:**
 
 ```bash
@@ -2996,23 +3057,29 @@ from learned_patterns import (
 )
 from datetime import datetime, timezone
 from pathlib import Path
+from state import acquire_state_lock
 
-lp = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
-acc = load_accumulator(Path('ACCUMULATOR_PATH'))
-entry = next(e for e in acc.entries if e.pattern_id == 'PATTERN_ID')
-lp.patterns.append(LearnedPattern(
-    id=entry.pattern_id,
-    name=entry.name,
-    body=entry.proposed_promotion_body,
-    domain_tags=entry.domain_tags,
-    target_stage=entry.target_stage,
-    wins=0, losses=0,
-    promoted_at=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
-    demotion_count=entry.demotion_count,
-))
-save_learned_patterns(Path('LEARNED_PATTERNS_PATH'), lp)
-remove_entry(acc, 'PATTERN_ID')
-save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    lp = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+    acc = load_accumulator(Path('ACCUMULATOR_PATH'))
+    entry = next(e for e in acc.entries if e.pattern_id == 'PATTERN_ID')
+    # Skip if already in learned_patterns (cross-file transaction recovery —
+    # prior promotion wrote learned_patterns but failed to update accumulator)
+    if not any(p.id == entry.pattern_id for p in lp.patterns):
+        lp.patterns.append(LearnedPattern(
+            id=entry.pattern_id,
+            name=entry.name,
+            body=entry.proposed_promotion_body,
+            domain_tags=entry.domain_tags,
+            target_stage=entry.target_stage,
+            wins=0, losses=0,
+            promoted_at=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+            demotion_count=entry.demotion_count,
+        ))
+        # Write order: learned_patterns FIRST, then accumulator
+        save_learned_patterns(Path('LEARNED_PATTERNS_PATH'), lp)
+    remove_entry(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
 "
 ```
 
@@ -3023,9 +3090,12 @@ python -c "
 import sys; sys.path.insert(0, 'SCRIPTS')
 from accumulator import load_accumulator, save_accumulator, mark_rejected
 from pathlib import Path
-acc = load_accumulator(Path('ACCUMULATOR_PATH'))
-mark_rejected(acc, 'PATTERN_ID')
-save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    acc = load_accumulator(Path('ACCUMULATOR_PATH'))
+    mark_rejected(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
 "
 ```
 
@@ -3036,9 +3106,12 @@ python -c "
 import sys; sys.path.insert(0, 'SCRIPTS')
 from accumulator import load_accumulator, save_accumulator, clear_promotion_pending
 from pathlib import Path
-acc = load_accumulator(Path('ACCUMULATOR_PATH'))
-clear_promotion_pending(acc, 'PATTERN_ID')
-save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    acc = load_accumulator(Path('ACCUMULATOR_PATH'))
+    clear_promotion_pending(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
 "
 ```
 
