@@ -4,7 +4,7 @@
 
 **Goal:** Implement the read path for case-based pattern learning so the research pipeline accumulates observations across runs, promotes them to durable rules under user approval, and surfaces them to subagents at run time — without editing any agent definition files.
 
-**Architecture:** Three pieces of new persistent state (`cases/{run_id}.json` extended, `accumulator.json` new, `learned_patterns.md` new) plus a new analyzer that runs at Stage 10b. Heuristic Python aggregation does the bulk; a Haiku subagent handles semantic comparison only. Orchestrator injects filtered learned patterns into subagent user prompts at Stage 4a / 4e / 6. v3.1.0 is purely additive — empty state means the pipeline behaves identically to v3.0.0.
+**Architecture:** Three pieces of new persistent state (`cases/{run_id}.json` extended, `accumulator.json` new, `learned_patterns.md` new) plus a new analyzer that runs at Stage 10d (after the existing v3.0.0 Stage 10c `write_case_record`). Heuristic Python aggregation does the bulk; a Haiku subagent handles semantic comparison only. Orchestrator injects filtered learned patterns into subagent user prompts at Stage 4a / 4e / 6. Graduation prompt is Stage 10e. v3.1.0 is purely additive — empty state means the pipeline behaves identically to v3.0.0.
 
 **Tech Stack:** Python 3.10+ (pure-Python helpers, JSON + markdown I/O, `_atomic_write` pattern), pytest + pytest-mock (offline tests, no API keys), Claude Code Haiku subagent (semantic compare only, via Task tool from orchestrator), `scripts/state.py` v3 schema (already in master).
 
@@ -1499,7 +1499,7 @@ git commit -m "feat(learned_patterns): tolerant markdown parser with skip-on-mal
 The orchestrator needs two filter modes:
 
 - **`filter_by_topic_text`** — used at Stage 2 BEFORE `domain_tags` exist. The current v3.0.0 pipeline derives `domain_tags` only at case-write time (Stage 10, from the most common tags across written notes — see `skills/research/SKILL.md:1250` and surrounding context). At Stage 2 the orchestrator only has topic strings from the resolver output. This helper does case-insensitive substring / token-overlap matching of each pattern's `domain_tags` against the joined topic text. Patterns whose tags appear anywhere in the topic text are considered relevant.
-- **`filter_relevant`** — used at Stage 10b when a case's `domain_tags` ARE available (derived from written notes). Same overlap-with-tags shape, but exact tag matching rather than fuzzy text.
+- **`filter_relevant`** — used at Stage 10d when a case's `domain_tags` ARE available (derived from written notes). Same overlap-with-tags shape, but exact tag matching rather than fuzzy text.
 - **`group_by_stage`** — partitions a list of patterns by `target_stage`.
 
 **Step 1: Write failing tests**
@@ -1535,7 +1535,7 @@ def test_filter_by_topic_text_case_insensitive():
 
 
 def test_filter_by_domain_overlap():
-    """filter_relevant matches by exact domain_tags overlap. Used at Stage 10b
+    """filter_relevant matches by exact domain_tags overlap. Used at Stage 10d
     when the case has its derived domain_tags available."""
     from learned_patterns import LearnedPatternsFile, LearnedPattern, filter_relevant
     f = LearnedPatternsFile(patterns=[
@@ -1601,7 +1601,7 @@ def filter_relevant(
     run_domain_tags: list[str],
 ) -> list[LearnedPattern]:
     """Return patterns whose domain_tags overlap with run_domain_tags.
-    Used at Stage 10b when the case has its derived domain_tags available."""
+    Used at Stage 10d when the case has its derived domain_tags available."""
     run_set = set(run_domain_tags)
     return [p for p in file.patterns if run_set & set(p.domain_tags)]
 
@@ -2452,7 +2452,7 @@ Create `scripts/case_analyzer.py`:
 ```python
 """Top-level case analyzer — wires heuristics + accumulator + scoring.
 
-Runs at Stage 10b. See docs/plans/2026-05-27-v3-1-case-learning-design.md Section 6.1.
+Runs at Stage 10d. See docs/plans/2026-05-27-v3-1-case-learning-design.md Section 6.1.
 """
 
 from __future__ import annotations
@@ -2538,6 +2538,17 @@ def analyze(
     learned, lp_warnings = load_learned_patterns(learned_patterns_path)
     result.warnings.extend(lp_warnings)
 
+    # Compute corruption flags early — they gate cross-file mutations below
+    # (so we don't write to one store while skipping the other and lose state).
+    acc_corrupt = any(
+        w.startswith("accumulator_corrupted") or w.startswith("accumulator_schema_mismatch")
+        for w in result.warnings
+    )
+    lp_corrupt = any(
+        w.startswith("learned_patterns_corrupted") or w.startswith("learned_patterns_schema_mismatch")
+        for w in result.warnings
+    )
+
     # 1. Score updates for applied_patterns
     outcome = compute_run_outcome(case, confidence_target=confidence_target)
     pattern_index = {p.id: p for p in learned.patterns}
@@ -2546,8 +2557,19 @@ def analyze(
             apply_score(pattern_index[pid], outcome)
             result.score_updates_applied += 1
 
-    # 2. Demotion sweep
-    demotion_targets = find_demotion_targets(learned)
+    # 2. Demotion sweep — SKIP if accumulator is corrupt. Demoting a pattern
+    # removes it from learned_patterns AND places it back into the accumulator;
+    # if the accumulator save is going to be skipped (because corrupt), the
+    # demoted pattern would disappear from BOTH stores. Defer demotions until
+    # the user repairs the accumulator file.
+    if acc_corrupt:
+        if find_demotion_targets(learned):
+            result.warnings.append(
+                "demotion_sweep_skipped: accumulator corrupt; deferring demotions until repair"
+            )
+        demotion_targets = []
+    else:
+        demotion_targets = find_demotion_targets(learned)
     for target in demotion_targets:
         # Reconstruction-or-update logic mirrors accumulator.demote() so the
         # 2nd-demotion → rejected rule still fires whether or not the
@@ -2649,14 +2671,8 @@ def analyze(
     #    (if the accumulator write fails after learned_patterns succeeded, the next
     #    run's analyzer dedupes via the in-learned_patterns check — no double-graduation;
     #    the reverse order would risk losing graduations).
-    acc_corrupt = any(
-        w.startswith("accumulator_corrupted") or w.startswith("accumulator_schema_mismatch")
-        for w in result.warnings
-    )
-    lp_corrupt = any(
-        w.startswith("learned_patterns_corrupted") or w.startswith("learned_patterns_schema_mismatch")
-        for w in result.warnings
-    )
+    #    acc_corrupt / lp_corrupt were computed early (above) so the demotion sweep
+    #    could honor them; reusing here.
     if not lp_corrupt:
         save_learned_patterns(learned_patterns_path, learned)
     if not acc_corrupt:
@@ -3161,7 +3177,7 @@ def dispatch_semantic_compare(
         return {"is_same": False, "reason": f"dispatch error: {e}"}
 ```
 
-**Note:** in production, the orchestrator dispatches the case-analyzer agent via the Task tool from inside `SKILL.md` Stage 10b, not via this Python helper. The helper exists for contract testing. The orchestrator's actual dispatch uses Claude Code's Task tool, which is the convention for all other subagent dispatches in this plugin.
+**Note:** in production, the orchestrator dispatches the case-analyzer agent via the Task tool from inside `SKILL.md` Stage 10d, not via this Python helper. The helper exists for contract testing. The orchestrator's actual dispatch uses Claude Code's Task tool, which is the convention for all other subagent dispatches in this plugin.
 
 **Step 4: Verify pass**
 
@@ -3181,7 +3197,7 @@ git commit -m "test(case_analyzer): contract test for semantic-compare dispatch 
 
 ## Phase 8: Orchestrator Extensions in SKILL.md
 
-**Goal:** Extend `skills/research/SKILL.md` with Stage 2 load, Stage 4a/4e/6 injection, Stage 10b analyzer dispatch, Stage 10c graduation prompt.
+**Goal:** Extend `skills/research/SKILL.md` with Stage 2 load, Stage 4a/4e/6 injection, Stage 10d analyzer dispatch (after existing v3.0.0 Stage 10c write_case_record), Stage 10e graduation prompt.
 
 **Files touched:** `skills/research/SKILL.md`.
 
@@ -3214,7 +3230,7 @@ print(json.dumps({stage: [p.id for p in patterns] for stage, patterns in grouped
 
 Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`. Substitute `TOPIC_STRINGS` with the list of topic strings from the resolver output (Stage 3's `final['topics']` — use each topic's `topic` field).
 
-**Why topic-text matching, not `domain_tags` matching at this stage:** v3.0.0 only derives `domain_tags` at case-write time (Stage 10), computed from tags assigned to written notes. At Stage 2 no notes exist yet. Topic strings are the strongest signal we have for relevance. Stage 10b's analyzer uses real `domain_tags` from the just-written case via `filter_relevant`.
+**Why topic-text matching, not `domain_tags` matching at this stage:** v3.0.0 only derives `domain_tags` at case-write time (Stage 10c), computed from tags assigned to written notes. At Stage 2 no notes exist yet. Topic strings are the strongest signal we have for relevance. Stage 10d's analyzer uses real `domain_tags` from the just-written case via `filter_relevant`.
 
 **Known limitation of substring-only matching:** patterns tagged with high-level concepts that don't appear verbatim in topic text (e.g., a pattern tagged `["civic"]` from a prior run won't match the topic `"ALPR programs in Greenville"` because "civic" isn't in the topic string). This is intentional for v3.1.0 — broader semantic matching would require an additional classification step at Stage 2 (cost we don't want to pay yet). The user benefits less from learned patterns early in a run but gets full credit at Stage 10b scoring once `domain_tags` are derived from written notes. Revisit for v3.2.0 if real usage shows this is too lossy.
 
@@ -3394,7 +3410,7 @@ If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised
 
 ```bash
 git add skills/research/SKILL.md
-git commit -m "feat(skill): Stage 10b dispatches case analyzer with state lock"
+git commit -m "feat(skill): Stage 10d dispatches case analyzer with state lock"
 ```
 
 ---
@@ -3518,14 +3534,14 @@ with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
 "
 ```
 
-If the user aborts (Ctrl+C, dismisses, walks away), do nothing. The `promotion_pending` flag remains set on the accumulator entry, and next-run Stage 10c will re-prompt.
+If the user aborts (Ctrl+C, dismisses, walks away), do nothing. The `promotion_pending` flag remains set on the accumulator entry, and next-run Stage 10e will re-prompt.
 ```
 
 **Step 2: Commit**
 
 ```bash
 git add skills/research/SKILL.md
-git commit -m "feat(skill): Stage 10c graduation prompt loop (promote/reject/hold)"
+git commit -m "feat(skill): Stage 10e graduation prompt loop (promote/reject/hold)"
 ```
 
 ---
@@ -3535,7 +3551,7 @@ git commit -m "feat(skill): Stage 10c graduation prompt loop (promote/reject/hol
 Spec + code-quality review over Phase 8's 5 commits.
 
 **Spec review:**
-"Confirm Stage 2d / 4a / 4e / 6 / 10b / 10c match design Section 4 (Data flow) exactly. Stage 10c write order is learned_patterns first, accumulator second."
+"Confirm Stage 2d / 4a / 4e / 6 / 10d / 10e match design Section 4 (Data flow) exactly. Stage 10e write order is learned_patterns first, accumulator second."
 
 **Code quality:**
 "Verify SKILL.md Bash invocations are escaping correctly (no unquoted paths with spaces). State lock is acquired around the analyzer call. Graduation prompt handles abort gracefully without corrupting state."
@@ -3847,9 +3863,9 @@ Per Tim's preference, run `cross-model-review:codex-impl-review` against the ful
 gh pr create --title "feat: v3.1.0 case-based pattern learning" --body "$(cat <<'EOF'
 ## Summary
 - Implements the read path for case-based pattern learning per the v3 design's Stage B preview
-- New analyzer at Stage 10b: heuristic Python (bulk) + Haiku (semantic compare only)
+- New analyzer at Stage 10d: heuristic Python (bulk) + Haiku (semantic compare only)
 - Accumulator + learned_patterns.md as the new state files; cases extended with applied_patterns
-- Prose-craft-style graduation ceremony at Stage 10c (promote / reject / hold)
+- Prose-craft-style graduation ceremony at Stage 10e (promote / reject / hold)
 - Agent definition files unchanged — purely additive
 
 ## Test plan
