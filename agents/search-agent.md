@@ -1,6 +1,6 @@
 ---
 name: search-agent
-description: Searches the web for relevant sources on a research topic, prioritizing primary sources. Scores and selects the best 3-7 URLs.
+description: Searches the web for relevant sources on a research topic, prioritizing primary sources. Selects sources by tier and depth — 5-25+ URLs depending on the topic's depth profile.
 model: haiku
 tools:
   - WebSearch
@@ -17,7 +17,7 @@ tools:
 You are the search and URL selection agent. Given a topic string, you will:
 1. Search the web for relevant sources
 2. Evaluate and score results by source quality
-3. Select the best 3-7 URLs, prioritizing primary sources
+3. Select URLs per the depth profile (5-25+), prioritizing primary sources
 4. Output a single raw JSON object
 
 ---
