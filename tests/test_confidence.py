@@ -1,6 +1,7 @@
 # tests/test_confidence.py
 from confidence import (
     DEPTH_PROFILES,
+    compute_confidence,
     get_depth_profile,
     primary_source_presence,
     source_count_adequacy,
@@ -104,3 +105,27 @@ def test_source_count_adequacy_above_target():
 
 def test_source_count_adequacy_zero():
     assert source_count_adequacy(sources_count=0, target=20) == 0.0
+
+
+def test_compute_confidence_strong_topic():
+    sources = [
+        {"tier": "T1", "is_primary": True},
+        {"tier": "T1", "is_primary": False},
+        {"tier": "T2", "is_primary": True},
+        {"tier": "T2", "is_primary": False},
+    ]
+    score = compute_confidence(sources, depth="standard")
+    # tier_diversity ~0.875, coverage 1.0, primary 1.0, adequacy 4/20=0.2
+    # 0.4*0.875 + 0.3*1.0 + 0.2*1.0 + 0.1*0.2 = 0.87
+    assert 0.86 <= score <= 0.88
+
+
+def test_compute_confidence_weak_topic():
+    sources = [{"tier": "T4", "is_primary": False}]
+    score = compute_confidence(sources, depth="standard")
+    # tier 0.25, coverage 0.0, primary 0.0, adequacy 1/20=0.05 = 0.105
+    assert 0.10 <= score <= 0.11
+
+
+def test_compute_confidence_empty():
+    assert compute_confidence([], depth="standard") == 0.0

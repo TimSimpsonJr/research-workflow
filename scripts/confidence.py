@@ -45,3 +45,20 @@ def source_count_adequacy(sources_count: int, target: int) -> float:
     if target <= 0:
         return 0.0
     return min(1.0, sources_count / target)
+
+
+def compute_confidence(sources: list[dict], depth: str) -> float:
+    """Composite confidence score for a topic's sources.
+
+    Weights: 0.4 tier_diversity + 0.3 topic_coverage + 0.2 primary_source_presence
+    + 0.1 source_count_adequacy.
+    """
+    if not sources:
+        return 0.0
+    target = get_depth_profile(depth)["target_sources"]
+    return (
+        0.4 * tier_diversity_weight(sources) +
+        0.3 * topic_coverage(sources) +
+        0.2 * primary_source_presence(sources) +
+        0.1 * source_count_adequacy(len(sources), target)
+    )
