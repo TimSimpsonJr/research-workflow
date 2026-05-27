@@ -14,6 +14,10 @@ A Claude Code plugin for deep research into Obsidian vaults. The `/research` ski
 - **State** (`state.py`): Pipeline checkpoints with crash recovery. The skill checkpoints after every stage and can resume from the last completed stage.
 - **Prompts** (`scripts/prompts/`): Text templates for summarization and synthesis. See `scripts/prompts/README.md` for the assembly pattern.
 
+## Pattern Learning (v3.1.0)
+
+After each run, Stage 10d's case analyzer scans recent case records for recurring heuristic signals (source-tier dominance, hop-pattern dominance, query-template recurrence) and accumulates candidate patterns at `{vault}/.research-workflow/accumulator.json`. Candidates earn promotion to `{vault}/.research-workflow/learned_patterns.md` after 3 observations (5 under a raised bar following demotion). Promoted patterns get injected into search-agent, hop-planner, and classify-agent prompts at Stages 4a/4e/6, biasing future runs toward what's worked before. W/L scoring runs end-of-run; patterns with W/(W+L) < 0.4 over >=5 uses are demoted. Two demotions -> permanent rejection. State writes are serialized via `state.acquire_state_lock` so concurrent /research runs can't race on the two vault files.
+
 ## Infrastructure tiers
 
 `detect_tier.py` determines what's available at startup:
