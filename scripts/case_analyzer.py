@@ -6,6 +6,7 @@ Runs at Stage 10d. See docs/plans/2026-05-27-v3-1-case-learning-design.md Sectio
 from __future__ import annotations
 
 import json
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -272,3 +273,40 @@ def _match_or_create_pattern_id(
         if verdict.get("is_same"):
             return existing.pattern_id
     return candidate["pattern_id"]
+
+
+def dispatch_semantic_compare(
+    *,
+    candidate_body: str,
+    existing_body: str,
+    timeout_s: float = 30.0,
+) -> dict:
+    """Dispatch the case-analyzer Haiku subagent for semantic comparison.
+
+    Returns {"is_same": bool, "reason": str}. On timeout, returns conservative
+    {"is_same": false, "reason": "timeout — treating as distinct"}.
+
+    NOTE: actual Haiku dispatch is via the orchestrator's Task tool at runtime;
+    this helper is here for contract testing. In production the orchestrator
+    constructs the Task tool dispatch directly. This subprocess.run wrapper
+    exists only so the contract test can mock it and pin the prompt shape.
+    """
+    prompt = (
+        "CANDIDATE\n"
+        f"{candidate_body}\n\n"
+        "EXISTING\n"
+        f"{existing_body}\n"
+    )
+    try:
+        proc = subprocess.run(
+            ["claude", "task", "--agent", "case-analyzer"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+        )
+        return json.loads(proc.stdout)
+    except subprocess.TimeoutExpired:
+        return {"is_same": False, "reason": "timeout — treating as distinct"}
+    except (json.JSONDecodeError, FileNotFoundError) as e:
+        return {"is_same": False, "reason": f"dispatch error: {e}"}
