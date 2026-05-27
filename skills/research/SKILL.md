@@ -1412,6 +1412,122 @@ If `promotion_candidates` is non-empty AND no `learned_patterns_*` warnings, pro
 
 If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised), log to state telemetry and continue silently. The run still completes; the analyzer just didn't update state this round.
 
+### 10e. Graduation prompt (v3.1.0, conditional on Stage 10d output)
+
+For each entry in `promotion_candidates`:
+
+Look up any matching entries in `contradictions` (where `candidate_pattern_id == entry.pattern_id`). If present, include a `Possible contradiction` block in the prompt so the user can weigh whether the new pattern conflicts with an existing graduated one.
+
+Show the user:
+
+```
+Learned pattern ready for promotion:
+
+  Name: {name}
+  Proposed body: {proposed_promotion_body}
+
+  Evidence:
+  {for each row in evidence:}
+    - case {case_id}: {signal}
+  {end}
+
+  {if contradictions for this entry:}
+  WARNING: Possible contradiction with already-graduated patterns
+      in the same domain x stage:
+  {for each conflicting_name:}
+    - {conflicting_name} (id: {conflicting_id})
+  {end}
+  Promoting both keeps them side-by-side and lets the scoring loop
+  sort it out. Rejecting this new pattern preserves the existing rule.
+  {end}
+
+Promote / Reject / Hold?
+```
+
+Use the user's response:
+
+All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10d uses -- without it, concurrent `/research` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
+
+**Precondition for the Promote branch:** Stage 10d already verified that `learned_patterns.md` is parseable (no `learned_patterns_corrupted` / `learned_patterns_schema_mismatch` warnings) BEFORE letting control reach Stage 10e. If those warnings were present, Stage 10d skipped 10e entirely. So inside the Promote branch we can assume `load_learned_patterns()` returns a usable file -- but the snippet below still defends against late corruption by checking warnings before saving.
+
+**Promote:**
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'SCRIPTS')
+from accumulator import load_accumulator, save_accumulator, remove_entry
+from learned_patterns import (
+    load_learned_patterns, save_learned_patterns, LearnedPattern
+)
+from datetime import datetime, timezone
+from pathlib import Path
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    lp, lp_warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+    if lp_warnings:
+        # Refuse to clobber a corrupt/incompatible file even if Stage 10d
+        # missed the gate (defense in depth). Log and bail.
+        import sys as _sys
+        print(f'PROMOTE_ABORTED: refusing to save over corrupt learned_patterns.md: {lp_warnings}', file=_sys.stderr)
+        _sys.exit(0)
+    acc, _ = load_accumulator(Path('ACCUMULATOR_PATH'))
+    entry = next(e for e in acc.entries if e.pattern_id == 'PATTERN_ID')
+    # Skip if already in learned_patterns (cross-file transaction recovery --
+    # prior promotion wrote learned_patterns but failed to update accumulator)
+    if not any(p.id == entry.pattern_id for p in lp.patterns):
+        lp.patterns.append(LearnedPattern(
+            id=entry.pattern_id,
+            name=entry.name,
+            body=entry.proposed_promotion_body,
+            domain_tags=entry.domain_tags,
+            target_stage=entry.target_stage,
+            category=entry.category,
+            wins=0, losses=0,
+            promoted_at=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+            demotion_count=entry.demotion_count,
+        ))
+        # Write order: learned_patterns FIRST, then accumulator
+        save_learned_patterns(Path('LEARNED_PATTERNS_PATH'), lp)
+    remove_entry(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+"
+```
+
+**Reject:**
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'SCRIPTS')
+from accumulator import load_accumulator, save_accumulator, mark_rejected
+from pathlib import Path
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    acc, _warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    mark_rejected(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+"
+```
+
+**Hold:**
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'SCRIPTS')
+from accumulator import load_accumulator, save_accumulator, clear_promotion_pending
+from pathlib import Path
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    acc, _warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    clear_promotion_pending(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+"
+```
+
+If the user aborts (Ctrl+C, dismisses, walks away), do nothing. The `promotion_pending` flag remains set on the accumulator entry, and next-run Stage 10e will re-prompt.
+
 ---
 
 ## Error Handling
