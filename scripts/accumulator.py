@@ -161,3 +161,13 @@ def tick_staleness(acc: Accumulator, seen_pattern_ids: set[str]) -> None:
     for entry in acc.entries:
         if entry.pattern_id not in seen_pattern_ids and entry.status == "hold":
             entry.sessions_since_last_seen += 1
+
+
+def mark_rejected(acc: Accumulator, pattern_id: str) -> None:
+    """Mark an entry as permanently rejected. Clears promotion_pending."""
+    for entry in acc.entries:
+        if entry.pattern_id == pattern_id:
+            entry.status = "rejected"
+            entry.promotion_pending = False
+            entry.last_updated_at = datetime.now(timezone.utc).isoformat()
+            return

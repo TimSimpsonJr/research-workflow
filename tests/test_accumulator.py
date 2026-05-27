@@ -155,3 +155,42 @@ def test_tick_staleness_increments_unobserved():
     tick_staleness(acc, seen_pattern_ids={"p1"})
     assert acc.entries[0].sessions_since_last_seen == 0  # p1 observed
     assert acc.entries[1].sessions_since_last_seen == 3  # p2 not observed
+
+
+def test_record_observation_skips_rejected_entries():
+    """record_observation is a no-op for entries with status=rejected."""
+    from accumulator import Accumulator, AccumulatorEntry, record_observation
+    rejected = AccumulatorEntry(
+        pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], sessions_seen=10, sessions_since_last_seen=0,
+        status="rejected", raised_bar=False, promotion_pending=False,
+        demotion_count=0, evidence=[],
+        proposed_promotion_body="",
+        created_at="", last_updated_at="",
+    )
+    acc = Accumulator(entries=[rejected])
+    record_observation(
+        acc, pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], evidence_row={"case_id": "c", "signal": "x"},
+        proposed_promotion_body="",
+    )
+    # sessions_seen unchanged, no new evidence row
+    assert acc.entries[0].sessions_seen == 10
+    assert acc.entries[0].evidence == []
+
+
+def test_mark_rejected_sets_status():
+    """mark_rejected sets status=rejected, clears promotion_pending."""
+    from accumulator import Accumulator, AccumulatorEntry, mark_rejected
+    e = AccumulatorEntry(
+        pattern_id="p1", name="", category="", target_stage="",
+        domain_tags=[], sessions_seen=3, sessions_since_last_seen=0,
+        status="promotion_pending", raised_bar=False, promotion_pending=True,
+        demotion_count=0, evidence=[],
+        proposed_promotion_body="",
+        created_at="", last_updated_at="",
+    )
+    acc = Accumulator(entries=[e])
+    mark_rejected(acc, pattern_id="p1")
+    assert acc.entries[0].status == "rejected"
+    assert acc.entries[0].promotion_pending is False
