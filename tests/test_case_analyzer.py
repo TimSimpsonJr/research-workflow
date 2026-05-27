@@ -54,3 +54,124 @@ def test_analyze_civic_alpr_cases_produces_promotion_candidates(tmp_path):
     assert len(result.promotion_candidates) >= 1
     civic = [c for c in result.promotion_candidates if "civic" in c.domain_tags]
     assert len(civic) >= 1
+
+
+def test_semantic_merge_uses_existing_pattern_id_on_haiku_match(tmp_path):
+    """When a heuristic candidate has the same (domain, category) as an
+    existing accumulator entry but a different stable_key, and the Haiku
+    semantic-compare returns is_same=True, the analyzer reuses the existing
+    pattern_id so sessions_seen accumulates on the right entry."""
+    from case_analyzer import analyze
+    from accumulator import Accumulator, AccumulatorEntry, save_accumulator
+    from datetime import datetime, timezone
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+
+    # Seed accumulator with a pre-existing entry in the civic-alpr / source-tier-bias
+    # bucket under pattern_id "existing-pid"
+    now = datetime.now(timezone.utc).isoformat()
+    save_accumulator(acc_path, Accumulator(entries=[
+        AccumulatorEntry(
+            pattern_id="existing-pid", name="Existing T1 pattern", category="source-tier-bias",
+            target_stage="search", domain_tags=["civic", "alpr"],
+            sessions_seen=1, sessions_since_last_seen=0, status="hold",
+            raised_bar=False, promotion_pending=False, demotion_count=0,
+            evidence=[{"case_id": "c0", "signal": "T1=5/8"}],
+            proposed_promotion_body="T1 dominance for civic ALPR", created_at=now,
+            last_updated_at=now,
+        ),
+    ]))
+
+    # Synthesize a case that will produce a "T1 dominant for civic/alpr" candidate
+    # under a different generated pattern_id. The heuristic needs >= min_cases=3
+    # cases to fire, so we write 3 case files.
+    case_template = {
+        "domain_tags": ["civic", "alpr"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.82}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {
+            "source_tiers": {"T1": 8, "T2": 1}, "hop_chain": ["entity_expansion"],
+            "queries": [],
+        },
+    }
+    for i in range(3):
+        case = {**case_template, "case_id": f"c{i}"}
+        (cases_dir / f"c{i}.json").write_text(json.dumps(case))
+    case_path = cases_dir / "c0.json"
+
+    # Haiku mock returns is_same=True for any compare
+    def fake_haiku(*, candidate_body, existing_body):
+        return {"is_same": True, "reason": "mock match"}
+
+    result = analyze(
+        case_path=case_path,
+        accumulator_path=acc_path,
+        learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+        haiku_dispatch=fake_haiku,
+    )
+
+    # Reload accumulator and verify the new evidence merged onto "existing-pid",
+    # not a fresh pattern_id
+    from accumulator import load_accumulator
+    acc, _ = load_accumulator(acc_path)
+    existing = next(e for e in acc.entries if e.pattern_id == "existing-pid")
+    assert existing.sessions_seen >= 2, "existing-pid should have accumulated"
+
+
+def test_semantic_merge_disabled_when_haiku_none(tmp_path):
+    """When haiku_dispatch is None, no semantic merge occurs — heuristic
+    candidates always use their own pattern_id (conservative default)."""
+    from case_analyzer import analyze
+    from accumulator import Accumulator, AccumulatorEntry, save_accumulator, load_accumulator
+    from datetime import datetime, timezone
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+
+    # Same scaffolding as the haiku-match test
+    now = datetime.now(timezone.utc).isoformat()
+    save_accumulator(acc_path, Accumulator(entries=[
+        AccumulatorEntry(
+            pattern_id="existing-pid", name="Existing T1 pattern", category="source-tier-bias",
+            target_stage="search", domain_tags=["civic", "alpr"],
+            sessions_seen=1, sessions_since_last_seen=0, status="hold",
+            raised_bar=False, promotion_pending=False, demotion_count=0,
+            evidence=[{"case_id": "c0", "signal": "T1=5/8"}],
+            proposed_promotion_body="T1 dominance for civic ALPR", created_at=now,
+            last_updated_at=now,
+        ),
+    ]))
+
+    case_template = {
+        "domain_tags": ["civic", "alpr"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.82}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {
+            "source_tiers": {"T1": 8, "T2": 1}, "hop_chain": ["entity_expansion"],
+            "queries": [],
+        },
+    }
+    for i in range(3):
+        case = {**case_template, "case_id": f"c{i}"}
+        (cases_dir / f"c{i}.json").write_text(json.dumps(case))
+
+    result = analyze(
+        case_path=cases_dir / "c0.json",
+        accumulator_path=acc_path,
+        learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+        haiku_dispatch=None,  # explicit None — no semantic merge
+    )
+
+    # Verify the heuristic-generated pattern_id is DIFFERENT from existing-pid
+    # — meaning the analyzer created a separate accumulator entry
+    acc, _ = load_accumulator(acc_path)
+    pids = {e.pattern_id for e in acc.entries}
+    assert "existing-pid" in pids
+    assert len(pids) >= 2, "should have created a fresh entry alongside existing-pid"
