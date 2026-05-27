@@ -44,3 +44,23 @@ def apply_score(pattern: LearnedPattern, outcome: str) -> None:
         pattern.losses += 1
     else:
         raise ValueError(f"outcome must be 'W' or 'L', got {outcome!r}")
+
+
+def find_demotion_targets(
+    file: LearnedPatternsFile,
+    *,
+    min_uses: int = 5,
+    max_loss_ratio: float = 0.4,
+) -> list[LearnedPattern]:
+    """Return patterns eligible for demotion: total uses >= min_uses AND
+    W / (W+L) < max_loss_ratio.
+    """
+    targets = []
+    for p in file.patterns:
+        total = p.wins + p.losses
+        if total < min_uses:
+            continue
+        ratio = p.wins / total if total > 0 else 0.0
+        if ratio < max_loss_ratio:
+            targets.append(p)
+    return targets

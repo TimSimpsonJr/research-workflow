@@ -70,3 +70,31 @@ def test_apply_score_rejects_unknown_outcome():
     with pytest.raises(ValueError):
         apply_score(p, "X")
     assert p.wins == 2 and p.losses == 1
+
+
+def test_demotion_sweep_flags_below_ratio():
+    """Pattern with W:L < 0.4 AND uses >= 5 is flagged for demotion."""
+    from score_updates import find_demotion_targets
+    from learned_patterns import LearnedPattern, LearnedPatternsFile
+    f = LearnedPatternsFile(patterns=[
+        LearnedPattern(id="bad", name="", body="", domain_tags=[],
+                       target_stage="search", wins=1, losses=4),  # 1/5 = 0.2 ratio
+        LearnedPattern(id="good", name="", body="", domain_tags=[],
+                       target_stage="search", wins=4, losses=1),  # 4/5 = 0.8 ratio
+        LearnedPattern(id="few", name="", body="", domain_tags=[],
+                       target_stage="search", wins=0, losses=3),  # uses < 5
+    ])
+    targets = find_demotion_targets(f, min_uses=5, max_loss_ratio=0.4)
+    assert {p.id for p in targets} == {"bad"}
+
+
+def test_demotion_sweep_ratio_exact_threshold():
+    """Pattern with W:L = 0.4 exactly is NOT demoted (must be < 0.4)."""
+    from score_updates import find_demotion_targets
+    from learned_patterns import LearnedPattern, LearnedPatternsFile
+    f = LearnedPatternsFile(patterns=[
+        LearnedPattern(id="boundary", name="", body="", domain_tags=[],
+                       target_stage="search", wins=2, losses=3),  # 2/5 = 0.4 exactly
+    ])
+    targets = find_demotion_targets(f, min_uses=5, max_loss_ratio=0.4)
+    assert targets == []
