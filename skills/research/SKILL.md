@@ -284,59 +284,17 @@ Note: strategy persistence now happens once in Stage 2c (immediately after the r
 
 ## Stage 3: Resolve
 
-### 2a. Create a new run
+Stage 3 runs ONLY for `unified` strategy. The run was already created in Stage 2a and the resolver already dispatched in Stage 2b -- here we just present the plan and save the approval.
 
-Generate a run ID from the current date and a slugified version of the user's input (e.g., `2026-03-05-sc-alpr-research`).
+### 3a. Present plan for approval
 
-Run via Bash:
-```bash
-python -c "
-import sys, json
-sys.path.insert(0, 'SCRIPTS')
-from state import create_run
-from pathlib import Path
-r = create_run(Path('STATE_DIR'), 'RUN_ID', 'TIER')
-print(json.dumps(r))
-"
-```
-
-### 2b. Dispatch topic-resolver agent
-
-Read the agent definition: `REPO/agents/topic-resolver.md`
-
-Dispatch via the Task tool:
-- `subagent_type`: `general-purpose`
-- `model`: `haiku`
-- `prompt`: The full contents of `agents/topic-resolver.md`, followed by a `---` separator, followed by:
-
-```
-prompt: {the user's original input}
-vault_root: {VAULT}
-scripts_dir: {SCRIPTS}
-```
-
-### 2c. Parse response
-
-The agent returns a single JSON object. Parse it to extract:
-- `project` -- display name for this research batch
-- `topics` -- list of `{topic, mode, priority, existing_urls, related_vault_notes}`
-- `local_sources` -- list of `{path, type}` (may be empty)
-- `thread_pulls` -- list of `{source_note, extracted_leads}` (may be empty)
-- `shared_context_files` -- vault-relative paths for context
-- `execution_order` -- `tier_1_first`, `parallel`, or `sequential`
-- `estimated_usage` -- message counts
-
-If the response starts with `ERROR:`, output the error, abandon the run, and stop.
-
-### 2d. Present plan for approval
-
-Show the user:
+Show the user (using the resolver response from Stage 2c):
 ```
 Research Plan: {project}
 
 Topics ({count}):
 {for each topic:}
-  - [{priority}] {topic} ({mode})
+  - [{depth}] {topic} ({mode})
 {end}
 
 {if local_sources:}
@@ -367,21 +325,26 @@ Proceed? [yes / edit / cancel]
 ```
 
 Wait for user response via the conversation:
-- **yes / proceed:** Continue to Stage 3.
-- **edit:** Let the user modify topics/priorities, then re-display the plan.
+- **yes / proceed:** Continue to 3b.
+- **edit:** Let the user modify topics, modes, and depths, then re-display the plan.
 - **cancel:** Abandon the run and stop.
 
-### 2e. Save plan
+### 3b. Save plan
 
-Mark plan as approved in state:
+Initialize per-topic state using `init_topic` and save the research plan. The run already exists (created in Stage 2a), so we append topics to it rather than re-create:
+
 ```bash
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from state import update_stage, save_stage_output
+from state import load_run, save_state, init_topic, update_stage, save_stage_output
 from pathlib import Path
 state_dir = Path('STATE_DIR')
-update_stage(state_dir, 'search')
+run = load_run(state_dir)
+plan_topics = PLAN_JSON['topics']
+run['topics'] = [init_topic(t['topic'], t['mode'], t['depth']) for t in plan_topics]
+save_state(state_dir, run)
+update_stage(state_dir, 'hop_loop')
 save_stage_output(state_dir, 'research_plan', PLAN_JSON)
 "
 ```
