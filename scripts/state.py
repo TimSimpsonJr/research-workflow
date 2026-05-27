@@ -30,6 +30,21 @@ def save_state(state_dir: Path, run: dict) -> None:
     _atomic_write(state_dir / CURRENT_RUN_FILE, run)
 
 
+def record_hop(state_dir: Path, topic_name: str, hop_data: dict) -> None:
+    """Append a hop record to the topic's genealogy and increment current_hop."""
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["hop_genealogy"].append(hop_data)
+            t["current_hop"] += 1
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
 def init_topic(topic: str, mode: str, depth: str) -> dict:
     """Create a fresh topic state entry for the run.
 

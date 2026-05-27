@@ -159,3 +159,26 @@ def test_create_run_topic_initialization(tmp_path):
         "replan_hint": None,
         "next_hop": None,
     }
+
+
+def test_record_hop_appends_to_genealogy(tmp_path):
+    from state import create_run, init_topic, record_hop, save_state
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    topic = init_topic("X", mode="web_research", depth="standard")
+    run["topics"] = [topic]
+    save_state(tmp_path, run)
+
+    hop_data = {
+        "hop": 1,
+        "pattern": None,
+        "queries": ["q1"],
+        "sources_found": 12,
+        "sources_kept": 7,
+        "ended_at": "2026-05-26T14:25:00Z",
+    }
+    record_hop(tmp_path, topic_name="X", hop_data=hop_data)
+
+    from state import load_run
+    reloaded = load_run(tmp_path)
+    assert reloaded["topics"][0]["hop_genealogy"] == [hop_data]
+    assert reloaded["topics"][0]["current_hop"] == 1
