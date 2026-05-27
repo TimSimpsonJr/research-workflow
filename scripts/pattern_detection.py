@@ -8,6 +8,7 @@ See docs/plans/2026-05-27-v3-1-case-learning-design.md Section 6.1.
 from __future__ import annotations
 
 import hashlib
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -162,6 +163,65 @@ def detect_hop_pattern_lift(
             "category": "hop-pattern-bias",
             "target_stage": "hop_planner",
             "domain_tags": list(domain_tags),
+            "proposed_promotion_body": body,
+            "evidence_rows": evidence,
+        })
+    return candidates
+
+
+_YEAR_PATTERN = re.compile(r"\b(19|20|21)\d{2}\b")
+_PROPER_NOUN = re.compile(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b")
+
+
+def _templatize(query: str) -> str:
+    """Replace likely proper-noun spans and years with placeholders."""
+    t = _YEAR_PATTERN.sub("[year]", query)
+    t = _PROPER_NOUN.sub("[entity]", t)
+    return t.strip().lower()
+
+
+def detect_query_template_recurrence(
+    cases: list[dict],
+    *,
+    min_recurrence: int = 3,
+) -> list[dict]:
+    """Detect query templates that recur across cases as queries that worked."""
+    by_domain_template: dict[tuple, list[dict]] = defaultdict(list)
+    for case in cases:
+        domain = tuple(sorted(case.get("domain_tags", [])))
+        if not domain:
+            continue
+        queries = (case.get("patterns_that_worked", {}) or {}).get("queries", []) or []
+        for q in queries:
+            if not isinstance(q, str):
+                continue
+            template = _templatize(q)
+            by_domain_template[(domain, template)].append(
+                {"case_id": case.get("case_id"), "raw_query": q}
+            )
+
+    candidates = []
+    for (domain, template), instances in by_domain_template.items():
+        if len(instances) < min_recurrence:
+            continue
+        domain_slug = "-".join(domain)
+        name = f"Recurring query template for {' / '.join(domain)}: {template}"
+        body = (
+            f"Query template `{template}` recurred {len(instances)} times across "
+            f"recent runs in this domain."
+        )
+        evidence = [
+            {"case_id": inst["case_id"], "signal": f"raw_query={inst['raw_query']!r}"}
+            for inst in instances
+        ]
+        # stable_key is the templatized query — recurs identically across runs
+        pid = _make_pattern_id(domain_slug, "query-template", template)
+        candidates.append({
+            "pattern_id": pid,
+            "name": name,
+            "category": "query-template",
+            "target_stage": "search",
+            "domain_tags": list(domain),
             "proposed_promotion_body": body,
             "evidence_rows": evidence,
         })

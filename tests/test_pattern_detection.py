@@ -36,3 +36,12 @@ def test_detect_hop_pattern_confidence_delta_tech():
     c = tech_candidates[0]
     assert c["category"] == "hop-pattern-bias"
     assert c["target_stage"] == "hop_planner"
+
+
+def test_detect_query_template_recurrence():
+    """When the same query template (e.g., '[city] ALPR [year]') recurs across
+    cases as a high-success query, detect_query_template_recurrence flags it."""
+    from pattern_detection import detect_query_template_recurrence
+    cases = json.loads(Path("tests/fixtures/case_learning/civic_alpr_cases.json").read_text())
+    candidates = detect_query_template_recurrence(cases, min_recurrence=3)
+    assert any(c["category"] == "query-template" for c in candidates)
