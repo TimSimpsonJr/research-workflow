@@ -1040,8 +1040,11 @@ def test_create_run_topic_initialization(tmp_path):
         "confidence_history": [],
         "contradiction_rate": 0.0,
         "seen_urls": [],
+        "replan_hint": None,
     }
 ```
+
+The `replan_hint` field carries the hop-planner's suggested course-correction (pattern + focus entity + query focus) when it returns `decision: "replan"`. Stage 5b reads it back when constructing the auto-replan dispatch. `None` when no replan has been requested.
 
 **Step 2: Run to confirm failure.**
 
@@ -1067,6 +1070,7 @@ def init_topic(topic: str, mode: str, depth: str) -> dict:
         "confidence_history": [],
         "contradiction_rate": 0.0,
         "seen_urls": [],
+        "replan_hint": None,
     }
 ```
 
@@ -1164,6 +1168,29 @@ def test_set_contradiction_rate(tmp_path):
     # Overwrites with newer value
     set_contradiction_rate(tmp_path, topic_name="X", rate=0.32)
     assert load_run(tmp_path)["topics"][0]["contradiction_rate"] == 0.32
+
+
+def test_set_replan_hint(tmp_path):
+    from state import create_run, init_topic, set_replan_hint, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    hint = {"issue": "thin sources", "suggested_pattern": "entity_expansion",
+            "suggested_query_focus": "official agency data"}
+    set_replan_hint(tmp_path, topic_name="X", hint=hint)
+    assert load_run(tmp_path)["topics"][0]["replan_hint"] == hint
+
+
+def test_bump_max_hops(tmp_path):
+    """Bumping max_hops lets a topic re-enter the hop loop after exhausting its budget."""
+    from state import create_run, init_topic, bump_max_hops, save_state, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]  # max_hops=3
+    save_state(tmp_path, run)
+
+    bump_max_hops(tmp_path, topic_name="X", increment=1)
+    assert load_run(tmp_path)["topics"][0]["max_hops"] == 4
 ```
 
 **Step 2: Run to confirm failure.**
@@ -1205,6 +1232,36 @@ def set_contradiction_rate(state_dir: Path, topic_name: str, rate: float) -> Non
     for t in run["topics"]:
         if t["topic"] == topic_name:
             t["contradiction_rate"] = rate
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def set_replan_hint(state_dir: Path, topic_name: str, hint: dict | None) -> None:
+    """Set or clear the topic's replan_hint (read by Stage 5b auto-replan)."""
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["replan_hint"] = hint
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
+
+
+def bump_max_hops(state_dir: Path, topic_name: str, increment: int = 1) -> None:
+    """Increase the topic's hop budget. Used by Stage 5b auto-replan to give a topic
+    another hop after it exhausts its initial budget; without this, the Stage 4
+    admission check (current_hop < max_hops) would silently filter the topic out."""
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            t["max_hops"] += increment
             break
     else:
         raise KeyError(f"Topic not found: {topic_name}")
@@ -2828,7 +2885,23 @@ vault_root: {VAULT}
 scripts_dir: {SCRIPTS}
 ```
 
-Expect the new response to have `strategy: "unified"` (rare cases: `planning_only`). Continue to 2e or Stage 3 accordingly.
+Expect the new response to have `strategy: "unified"` (rare cases: `planning_only`).
+
+**Re-persist the strategy from the second response.** The first dispatch persisted `"intent_planning"` in 2c; that value is now stale because the clarified resolver may have returned a different strategy.
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, save_state
+from pathlib import Path
+run = load_run(Path('STATE_DIR'))
+run['strategy'] = 'NEW_STRATEGY_FROM_SECOND_DISPATCH'
+save_state(Path('STATE_DIR'), run)
+"
+```
+
+Then continue to 2e or Stage 3 accordingly.
 
 If the user abandons mid-Q&A (cancel / explicit abort), call `abandon_run(STATE_DIR)` and stop.
 
@@ -3050,9 +3123,9 @@ scripts_dir: SCRIPTS
 
 Parse each hop-planner response:
 
-- `decision == "continue"`: call `record_hop()` with hop_data including this hop's pattern (from prior hop-planner) and stats. Topic stays active for next hop level.
+- `decision == "continue"`: call `record_hop()` with hop_data including this hop's pattern (from prior hop-planner) and stats. Clear any stale replan_hint via `set_replan_hint(topic, None)`. Topic stays active for next hop level.
 - `decision == "stop"`: call `record_hop()` once, then `mark_topic_status(topic, "complete")`.
-- `decision == "replan"`: call `mark_topic_status(topic, "replan_pending")`. Save the `replan_hint`. The quality gate (Stage 5) will handle it.
+- `decision == "replan"`: call `set_replan_hint(topic, response.replan_hint)` to persist the hint, then `mark_topic_status(topic, "replan_pending")`. The quality gate (Stage 5) will read the hint back.
 
 For early-termination cases (Stage 4a returned zero sources after one alternate pattern attempt), the hop-planner can also return `decision: "stop"` with `status: "early_terminated"` — call `mark_topic_status(topic, "early_terminated")`.
 
@@ -3108,28 +3181,51 @@ git commit -m "feat(skill): Stage 4 multi-hop loop with hop-planner dispatch"
 
 After all topics have status != "active", compute the run-level quality signals and decide whether to proceed to classify, auto-replan, or prompt the user.
 
-### 5a. Compute confidence per topic
+### 5a. Compute per-topic pass/fail
 
-For each topic, the most recent value in `confidence_history` is its current confidence. Aggregate to run-level:
+Each topic has its own depth and therefore its own `confidence_target` (via `get_depth_profile(topic.depth)["confidence_target"]`). Check per-topic, not run-aggregate:
 
 ```python
-overall_confidence = min(t.confidence_history[-1] for t in topics if t.confidence_history)
-overall_contradictions = max(t.contradiction_rate for t in topics)
+from confidence import get_depth_profile
+
+def topic_passes(t) -> bool:
+    target = get_depth_profile(t["depth"])["confidence_target"]
+    latest_conf = t["confidence_history"][-1] if t["confidence_history"] else 0.0
+    return latest_conf >= target and t["contradiction_rate"] <= 0.3
+
+failing_topics = [t for t in run["topics"] if not topic_passes(t)]
 ```
 
-If `overall_confidence >= depth_target` AND `overall_contradictions <= 0.3` for all topics: proceed to Stage 6 (classify).
+If `failing_topics` is empty: proceed to Stage 6 (classify).
 
 ### 5b. Auto-replan (if eligible)
 
-If `replan_count < 2`:
+If `failing_topics` is non-empty AND `replan_count < 2`, run an auto-replan cycle:
 
-1. Identify the weakest topic(s) — those below confidence target or above contradiction threshold.
-2. For each weakest topic, construct a replan hint:
-   - If the topic had a recent `replan` decision from hop-planner: use that `replan_hint`.
-   - Otherwise: synthesize a hint pointing at the gap (e.g., "Topic X has only T3/T4 sources; try entity_expansion on a named entity to find primary sources.").
-3. Re-mark the topic as `active` and set `current_hop` to its last completed hop (so the next iteration is a fresh hop after that point).
+1. For each failing topic, construct a replan hint:
+   - If the topic has a stored `replan_hint` from a hop-planner `decision: "replan"`: use it directly.
+   - Otherwise: synthesize a hint pointing at the gap (e.g., `{"issue": "thin sources", "suggested_pattern": "entity_expansion", "suggested_query_focus": "official agency data"}`). Persist via `set_replan_hint(topic, synthesized_hint)`.
+2. **Re-admit each failing topic into the hop loop.** A topic that exhausted its initial budget has `current_hop == max_hops`, so Stage 4's admission filter (`current_hop < max_hops`) would otherwise skip it. To enable another hop without rewinding completed work, call `bump_max_hops(topic, increment=1)`. This gives the topic exactly one additional hop slot.
+3. Call `mark_topic_status(topic, "active")` to re-admit.
 4. Call `increment_replan(STATE_DIR)`.
-5. Return to Stage 4 (the hop loop runs another pass for the replan-marked topics only).
+5. Return to Stage 4 (the hop loop runs one more pass; only re-admitted topics dispatch search/fetch/summarize/hop-planner). Stage 4a's search-agent reads `topic.replan_hint` to bias the next query toward the suggested pattern/focus.
+
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from state import load_run, set_replan_hint, bump_max_hops, mark_topic_status, increment_replan
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+run = load_run(state_dir)
+for t in FAILING_TOPICS:
+    if t['replan_hint'] is None:
+        set_replan_hint(state_dir, t['topic'], SYNTHESIZED_HINT)
+    bump_max_hops(state_dir, t['topic'], increment=1)
+    mark_topic_status(state_dir, t['topic'], 'active')
+increment_replan(state_dir)
+"
+```
 
 ### 5c. User prompt (after 2 auto-replan failures)
 
