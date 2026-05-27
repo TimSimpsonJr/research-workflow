@@ -307,3 +307,65 @@ def test_demote_syncs_count_when_existing_entry_is_fresh(tmp_path):
     assert entry.status == "rejected", \
         f"expected status='rejected' (demotion_count synced from 0 to 1, then demote() -> 2), got {entry.status!r}"
     assert entry.demotion_count == 2
+
+
+def test_analyzer_does_not_re_create_graduated_pattern(tmp_path):
+    """After a pattern is graduated to learned_patterns, the heuristic
+    continuing to detect it from cases must NOT create a duplicate
+    accumulator entry. Regression for codex-impl-review finding
+    duplicate-graduation cluster."""
+    from case_analyzer import analyze
+    from accumulator import Accumulator, load_accumulator, save_accumulator
+    from learned_patterns import (
+        LearnedPatternsFile, LearnedPattern,
+        load_learned_patterns, save_learned_patterns,
+    )
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+
+    # Pre-graduate a pattern with the id the source-tier heuristic would generate
+    # for [civic, alpr] + T1 dominance.
+    graduated_pid = "alpr-civic-source-tier-bias-1f93"
+    save_learned_patterns(lp_path, LearnedPatternsFile(patterns=[
+        LearnedPattern(
+            id=graduated_pid, name="T1 sources dominate for alpr / civic queries",
+            body="Already-graduated body",
+            domain_tags=["alpr", "civic"], target_stage="search",
+            category="source-tier-bias",
+            wins=5, losses=1, promoted_at="2026-05-01", demotion_count=0,
+        ),
+    ]))
+    save_accumulator(acc_path, Accumulator())  # empty accumulator
+
+    # Write 3 cases that would produce the source-tier heuristic candidate
+    import json
+    for i in range(3):
+        case = {
+            "case_id": f"c{i}", "version": 1,
+            "domain_tags": ["civic", "alpr"], "applied_patterns": [],
+            "confidence_per_topic": {"t": 0.82}, "contradiction_rate": 0.1,
+            "outcomes": {"user_decisions": []},
+            "patterns_that_worked": {
+                "source_tiers": {"T1": 8, "T2": 1},
+                "hop_chain": ["entity_expansion"],
+                "queries": [],
+            },
+        }
+        (cases_dir / f"c{i}.json").write_text(json.dumps(case))
+
+    # Run analyzer on the latest case
+    result = analyze(
+        case_path=cases_dir / "c2.json",
+        accumulator_path=acc_path, learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+    )
+
+    # The accumulator should NOT have a new entry for the graduated pattern_id.
+    # Without the fix, the heuristic would have created one with sessions_seen=1.
+    acc, _ = load_accumulator(acc_path)
+    duplicate = [e for e in acc.entries if e.pattern_id == graduated_pid]
+    assert duplicate == [], \
+        f"graduated pattern_id should not be re-created in accumulator, found: {duplicate}"

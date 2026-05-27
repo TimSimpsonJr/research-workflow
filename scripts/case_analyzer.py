@@ -172,9 +172,25 @@ def analyze(
     )
 
     # 4. Record observations into accumulator (with optional Haiku semantic merge)
+    # Skip candidates whose pattern_id is already graduated. Otherwise the
+    # heuristic would re-create the same pattern in the accumulator after each
+    # promotion, leading to "duplicate" re-graduations. Patterns present in
+    # learned.patterns are by definition graduated (demotion moves them back
+    # to the accumulator and removes them from learned).
+    learned_pattern_ids = {p.id for p in learned.patterns}
     seen_pattern_ids = set()
     for c in candidates:
+        # Cheap exact-match check before the semantic-merge dispatch.
+        if c["pattern_id"] in learned_pattern_ids:
+            continue
         effective_pid = _match_or_create_pattern_id(c, accumulator, haiku_dispatch, result)
+        # Defense-in-depth: if semantic-merge resolved to a graduated id, skip too.
+        # In practice _match_or_create_pattern_id only walks non-rejected accumulator
+        # entries, and graduated patterns are removed from the accumulator at
+        # promotion time — so this branch is only reachable if a future change
+        # surfaces a graduated id through that path.
+        if effective_pid in learned_pattern_ids:
+            continue
         for ev in c["evidence_rows"]:
             record_observation(
                 accumulator,
@@ -215,8 +231,8 @@ def analyze(
     # 6. Persist selectively — refuse to clobber files that loaded with warnings.
     #    Write order when both are written: learned_patterns FIRST, then accumulator
     #    (if the accumulator write fails after learned_patterns succeeded, the next
-    #    run's analyzer dedupes via the in-learned_patterns check — no double-graduation;
-    #    the reverse order would risk losing graduations).
+    #    run's analyzer dedupes via the step-4 `learned_pattern_ids` skip — no
+    #    double-graduation; the reverse order would risk losing graduations).
     if not lp_corrupt:
         save_learned_patterns(learned_patterns_path, learned)
     if not acc_corrupt:
