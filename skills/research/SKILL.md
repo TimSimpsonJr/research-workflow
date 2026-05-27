@@ -448,6 +448,44 @@ HOP CONTEXT: This is hop {N} of {max_hops} for topic "{topic}". Use the {pattern
 {if replan_hint: "Previous gap: " + replan_hint.issue}
 ```
 
+**Learned-pattern injection (v3.1.0):** if `LEARNED_BY_STAGE["search"]` is non-empty, ALSO load each pattern's full record and append a `## Learned Patterns` block to the search-agent prompt:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from learned_patterns import load_learned_patterns
+from pathlib import Path
+lp, _warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+ids = LEARNED_IDS_FOR_STAGE
+out = [{'id': p.id, 'name': p.name, 'body': p.body} for p in lp.patterns if p.id in ids]
+print(json.dumps(out))
+"
+```
+
+Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md` and pass `LEARNED_IDS_FOR_STAGE` as the list `LEARNED_BY_STAGE["search"]`.
+
+Build a `## Learned Patterns` block from the returned records (4-space indented to show the literal markdown the orchestrator emits):
+
+    ## Learned Patterns (from prior runs, may or may not apply)
+
+    - **{name}** -- {body}
+
+    (repeat per pattern)
+
+Append this block to the search-agent's user prompt under the existing context. Then, for each pattern surfaced, record it in run state:
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'SCRIPTS')
+from state import record_applied_pattern
+from pathlib import Path
+record_applied_pattern(Path('STATE_DIR'), 'PATTERN_ID')
+"
+```
+
+Run once per pattern id.
+
 Batch dispatches at <=5 topics per round.
 
 After dispatch, collect all `selected_urls` arrays from the search agent responses (and merge SearXNG results when `SEARXNG_AVAILABLE`, deduplicating by URL). Build a per-hop `search_context_hop{N}.json` file in `STATE_DIR/` keyed off active topics for this iteration.
