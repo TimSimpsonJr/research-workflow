@@ -405,6 +405,7 @@ These are knobs that may move once we have real usage data. Defaults proposed:
 
 ## 10. Out of scope for v3.1.0
 
+- **Cross-source classify-decision heuristic** (design §6.1 signal 4) — not implemented in v3.1.0. The three signals shipped (source-tier dominance, hop-pattern dominance, query-template recurrence) cover the search and hop_planner stages. Classify-stage learning is deferred to v3.1.1+ once the case-record schema emits per-source classify outcomes.
 - **Editing agent definition files** — deferred to v3.2.0. By then `learned_patterns.md` will have earned trust and we'll have data on how to fold patterns into agent prompts safely.
 - **Mid-run pattern reload** — patterns load once at Stage 2 and stay static through the run. Hops may reveal new domains, but reloading would be expensive and inconsistent. Patterns relevant to a discovered domain surface in the *next* run.
 - **Bulk backfill command** — no v3.0.0 cases exist yet, so unnecessary at ship time. Add later if a user accumulates cases via long pipeline runs before installing v3.1.0.

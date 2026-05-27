@@ -105,14 +105,22 @@ def _avg_confidence(case: dict) -> float:
 def detect_hop_pattern_lift(
     cases: list[dict],
     *,
-    min_lift: float = 0.1,
+    min_dominance: float = 0.1,
     min_cases: int = 3,
 ) -> list[dict]:
     """Detect domains where one hop pattern (entity_expansion / temporal_progression
-    / conceptual_deepening / causal_chain) consistently lifts confidence the most
-    when applied at a given hop position.
+    / conceptual_deepening / causal_chain) dominates the patterns_that_worked.hop_chain
+    counts across cases.
 
-    Cases must include patterns_that_worked.hop_chain and confidence_per_topic.
+    Note: ``patterns_that_worked.hop_chain`` is the set of hop patterns that lifted
+    confidence enough to land a topic in patterns_that_worked at run time — so
+    frequency-dominance there IS a lift signal. ``min_dominance=0.1`` means the
+    winning pattern must hold >= 90% share of all hop-chain entries (i.e., the
+    second-best pattern's share is <= 10%).
+
+    A future enhancement could replace this proxy with a true confidence-delta
+    computation if the case-record schema starts emitting per-hop confidence
+    history (currently it emits per-topic only).
     """
     by_domain: dict[tuple, list[dict]] = defaultdict(list)
     for case in cases:
@@ -137,7 +145,7 @@ def detect_hop_pattern_lift(
         # Pick the most frequent
         winning_pattern = max(pattern_counts, key=lambda k: pattern_counts[k])
         share = pattern_counts[winning_pattern] / sum(pattern_counts.values())
-        if share < (1 - min_lift):  # winner needs strong dominance
+        if share < (1 - min_dominance):  # winner needs strong dominance
             continue
 
         domain_slug = "-".join(domain_tags)
