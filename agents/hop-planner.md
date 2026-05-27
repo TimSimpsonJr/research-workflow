@@ -40,7 +40,7 @@ You will receive:
 
 ## Step 1: Compute Confidence
 
-Call the confidence formula on `sources_so_far`:
+Call the confidence formula on `sources_so_far`. The orchestrator substitutes the `{scripts_dir}`, `{sources_file}`, and `{depth}` placeholders before dispatching the prompt — treat them as filled in by the time you run this:
 
 ```bash
 python -c "
@@ -63,6 +63,8 @@ If contradictions have been detected by classify-agent (in a prior pass), the or
 ---
 
 ## Step 3: Decide Continue / Stop / Replan
+
+Evaluate the conditions below in order; the first one that matches wins. Ties (e.g., `confidence_score` exactly equal to `confidence_target * 0.7`) fall through to `continue` because none of the strict `<` / `>=` conditions trigger.
 
 - If `confidence_score >= confidence_target` AND `contradiction_rate <= 0.3`: `decision: "stop"`. No `next_hop`.
 - If `current_hop >= max_hops`: `decision: "stop"`. No `next_hop`.
@@ -89,7 +91,20 @@ Avoid repeating a pattern from `hop_genealogy` unless the prior attempt failed (
 For each candidate target (entity, time period, concept, cause), score 0-10 using:
 
 - **Frequency (0-3):** how many summaries mention this candidate
-- **Novelty (0-3):** is this new to the vault? Query the vault index via Bash to check.
+- **Novelty (0-3):** is this new to the vault? Query the vault index via Bash to check. Example query (orchestrator substitutes `{vault_index_path}`):
+
+  ```bash
+  python -c "
+  import sys, json
+  sys.path.insert(0, '{scripts_dir}')
+  from vault_index import search
+  from pathlib import Path
+  hits = search(Path('{vault_index_path}').parent, 'CANDIDATE_NAME', limit=5)
+  print(len(hits))   # 0 = fully novel; 1-2 = some coverage; 3+ = well-covered
+  "
+  ```
+
+  Score 3 if no hits (fully novel), 2 if 1-2 hits (extends a thin existing note), 1 if 3-4 hits (extends a well-covered note), 0 if 5+ hits (well-covered, low novelty).
 - **Connectedness (0-2):** does it relate to multiple existing vault notes?
 - **Specificity (0-2):** is this a named entity / bill number / data point (high), a named person/org (medium), or a vague concept (low)?
 
