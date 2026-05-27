@@ -60,11 +60,34 @@ def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
 
 
 def load_run(state_dir: Path) -> dict | None:
-    """Load current run, or None if no active run."""
-    run_file = state_dir / CURRENT_RUN_FILE
-    if not run_file.exists():
+    """Load current run, or None if no active run.
+
+    If the on-disk schema version does not match STATE_VERSION, archive the
+    stale file in-place and return None. We archive directly here (without
+    calling abandon_run -> _archive_run -> load_run) to avoid infinite
+    recursion on schema-mismatch files.
+    """
+    state_file = state_dir / CURRENT_RUN_FILE
+    if not state_file.exists():
         return None
-    return json.loads(run_file.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(state_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    if data.get("version") != STATE_VERSION:
+        print(
+            f"Your in-flight run was on an older schema (v{data.get('version', 'unknown')}) "
+            f"and has been abandoned. Run /research to start fresh.",
+            file=sys.stderr,
+        )
+        # Archive in-place WITHOUT recursing through abandon_run -> _archive_run -> load_run
+        old_id = data.get("run_id", "unparseable")
+        history_dir = state_dir / "history" / f"{old_id}-stale-v{data.get('version', 'unknown')}"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        for f in state_dir.glob("*.json"):
+            shutil.move(str(f), str(history_dir / f.name))
+        return None
+    return data
 
 
 def update_stage(state_dir: Path, stage: str, progress: dict | None = None) -> None:

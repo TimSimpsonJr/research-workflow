@@ -118,3 +118,24 @@ def test_is_stale_run(tmp_path):
     from state import create_run, is_stale_run
     create_run(tmp_path, "test", "base")
     assert is_stale_run(tmp_path, max_age_hours=24) is False
+
+
+def test_load_run_drops_old_schema(tmp_path, capsys):
+    from state import load_run
+    # Write a fake v2-era state file
+    state_file = tmp_path / "current_run.json"
+    state_file.write_text(json.dumps({"run_id": "old", "version": 2, "tier": "full"}))
+    result = load_run(tmp_path)
+    assert result is None
+    err = capsys.readouterr().err   # message goes to stderr (see implementation)
+    assert "older schema" in err.lower()
+    # The state file should have been moved out (abandoned to history/)
+    assert not (tmp_path / "current_run.json").exists()
+
+
+def test_load_run_drops_missing_version(tmp_path, capsys):
+    from state import load_run
+    state_file = tmp_path / "current_run.json"
+    state_file.write_text(json.dumps({"run_id": "old", "tier": "full"}))  # no version
+    result = load_run(tmp_path)
+    assert result is None
