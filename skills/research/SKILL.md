@@ -283,7 +283,35 @@ update_stage(state_dir, 'hop_loop')
 "
 ```
 
-Note: strategy persistence now happens once in Stage 2c (immediately after the resolver returns), so every path through Stage 2 ends with `run["strategy"]` set. No separate 2f step needed.
+Note: strategy persistence now happens once in Stage 2c (immediately after the resolver returns), so every path through Stage 2 ends with `run["strategy"]` set.
+
+### 2f. Load learned patterns (v3.1.0)
+
+Run via Bash:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from learned_patterns import load_learned_patterns, filter_by_topic_text, group_by_stage
+from pathlib import Path
+lp, _warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+relevant = filter_by_topic_text(lp, topics=TOPIC_STRINGS)
+grouped = group_by_stage(relevant)
+print(json.dumps({stage: [p.id for p in patterns] for stage, patterns in grouped.items()}))
+"
+```
+
+Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`. Substitute `TOPIC_STRINGS` with the list of topic strings from the resolver output (Stage 3's `final['topics']` -- use each topic's `topic` field).
+
+**Why topic-text matching, not `domain_tags` matching at this stage:** v3.0.0 only derives `domain_tags` at case-write time (Stage 10c), computed from tags assigned to written notes. At Stage 2 no notes exist yet. Topic strings are the strongest signal we have for relevance. Stage 10d's analyzer uses real `domain_tags` from the just-written case via `filter_relevant`.
+
+**Known limitation of substring-only matching:** patterns tagged with high-level concepts that don't appear verbatim in topic text (e.g., a pattern tagged `["civic"]` from a prior run won't match the topic `"ALPR programs in Greenville"` because "civic" isn't in the topic string). This is intentional for v3.1.0 -- broader semantic matching would require an additional classification step at Stage 2 (cost we don't want to pay yet). The user benefits less from learned patterns early in a run but gets full credit at Stage 10b scoring once `domain_tags` are derived from written notes. Revisit for v3.2.0 if real usage shows this is too lossy.
+
+Parse the JSON output and store:
+- `LEARNED_BY_STAGE` = the returned dict mapping `search` / `hop_planner` / `classify` -> list of pattern IDs
+
+If the file doesn't exist or returns empty, set `LEARNED_BY_STAGE = {"search": [], "hop_planner": [], "classify": []}`. Continue silently.
 
 ---
 
