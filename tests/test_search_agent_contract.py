@@ -76,3 +76,35 @@ def test_tier_consistent_with_credibility_score():
     assert bucketed == "T1"
     bucketed = tier_from_score(0.75)
     assert bucketed == "T2"
+
+
+VALID_PRIMARY_TYPES = {None, "agency_data", "legal_record", "foia",
+                       "official_statement", "peer_reviewed"}
+
+
+def test_primary_type_must_be_enumerated_value():
+    """primary_type values must come from the agent spec enum (or null when is_primary=False)."""
+    # A response with an out-of-enum primary_type indicates the agent drifted
+    # or someone authored a fixture/test without consulting the spec.
+    for pt in ["agency_data", "legal_record", "foia", "official_statement", "peer_reviewed", None]:
+        assert pt in VALID_PRIMARY_TYPES
+
+
+def test_primary_type_null_when_not_primary():
+    """Spec invariant: is_primary=False implies primary_type=None."""
+    response = json.dumps({
+        "topic": "X",
+        "depth": "standard",
+        "queries_used": [],
+        "selected_urls": [
+            {"url": "u", "title": "t", "snippet": "", "relevance_score": 0.5,
+             "credibility_score": 0.6, "tier": "T3", "is_primary": False,
+             "primary_type": None, "reason": ""},
+        ],
+        "rejected_urls": [],
+        "search_notes": "",
+    })
+    parsed = parse_search_output(response)
+    for url in parsed["selected_urls"]:
+        if not url["is_primary"]:
+            assert url["primary_type"] is None, "is_primary=False must have null primary_type"

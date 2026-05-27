@@ -492,7 +492,7 @@ summaries_so_far: {path to all summaries this topic has collected across all hop
 sources_so_far: {path to all sources this topic has collected}
 hop_genealogy: {topic.hop_genealogy as JSON}
 seen_urls: {topic.seen_urls}
-vault_index_path: {VAULT}/.research-workflow/vault.db
+vault_index_path: {VAULT}/.research-workflow/vault_index.db
 scripts_dir: SCRIPTS
 ```
 

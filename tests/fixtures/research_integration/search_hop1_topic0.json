@@ -13,9 +13,9 @@
       "relevance_score": 0.94,
       "credibility_score": 0.92,
       "tier": "T1",
-      "is_primary": true,
-      "primary_type": "investigative_journalism",
-      "reason": "Primary investigative report from a recognized civil liberties organization."
+      "is_primary": false,
+      "primary_type": null,
+      "reason": "High-credibility secondary investigative report from a recognized civil liberties organization."
     },
     {
       "url": "https://flocksafety.com/transparency",
@@ -25,8 +25,8 @@
       "credibility_score": 0.78,
       "tier": "T2",
       "is_primary": true,
-      "primary_type": "company_disclosure",
-      "reason": "First-party transparency disclosure from the vendor."
+      "primary_type": "official_statement",
+      "reason": "First-party transparency disclosure from the vendor (company statement about itself)."
     },
     {
       "url": "https://www.brookings.edu/articles/alpr-policy-tradeoffs",

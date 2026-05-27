@@ -26,10 +26,20 @@ def test_fixtures_parse_into_expected_shapes():
                for t in resolver["topics"])
 
     search = load_fixture("search_hop1_topic0.json")
+    valid_primary_types = {None, "agency_data", "legal_record", "foia",
+                           "official_statement", "peer_reviewed"}
     for url in search["selected_urls"]:
         assert url["tier"] in {"T1", "T2", "T3", "T4"}
         assert 0.0 <= url["credibility_score"] <= 1.0
         assert isinstance(url["is_primary"], bool)
+        # primary_type must be one of the spec-enumerated values (or null when not primary)
+        assert url["primary_type"] in valid_primary_types, (
+            f"invalid primary_type: {url['primary_type']!r} "
+            f"(must be one of {sorted(s for s in valid_primary_types if s)} or null)"
+        )
+        # Consistency: is_primary=false MUST mean primary_type=null
+        if not url["is_primary"]:
+            assert url["primary_type"] is None
 
     planner = load_fixture("hop_planner_topic0_hop1.json")
     assert planner["decision"] in {"continue", "stop", "replan"}
