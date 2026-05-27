@@ -812,7 +812,29 @@ Substitute `CLASSIFICATION_JSON` with the parsed dict from Stage 6c, serialized 
 
 This is the core stage. **You (the Sonnet orchestrator) write the notes.** For synthesis notes, you escalate to Opus.
 
-### 7a. Sort notes by priority tier
+### 7a. Aggregate per-hop fetch results
+
+Stage 4 produces one `fetch_results_hop{N}.json` per hop. Before writing notes, merge them into a single url -> content lookup so 7c.iii (full-source-content recovery) doesn't have to re-glob and re-parse per note:
+
+```bash
+python -c "
+import sys, json
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+url_to_entry = {}
+for hf in sorted(state_dir.glob('fetch_results_hop*.json')):
+    data = json.loads(hf.read_text())
+    for entry in data.get('fetched', []):
+        # later hops win on URL collisions (same URL re-fetched gets the freshest content)
+        url_to_entry[entry['url']] = entry
+combined = {'fetched': list(url_to_entry.values()), 'by_url': url_to_entry}
+(state_dir / 'fetch_results_aggregated.json').write_text(json.dumps(combined, indent=2))
+"
+```
+
+The aggregated file has the same `{"fetched": [...]}` shape as the v2 monolithic `fetch_results.json`, plus a convenience `by_url` index for O(1) lookups. Stage 7c.iii reads from this file.
+
+### 7b. Sort notes by priority tier
 
 Order the `notes_to_create` list:
 1. `primary` (deep coverage) -- Tier 1 notes first
@@ -821,7 +843,7 @@ Order the `notes_to_create` list:
 
 Writing Tier 1 first ensures that Tier 2 and Tier 3 notes can reference them with wikilinks.
 
-### 7b. For each note, in order:
+### 7c. For each note, in order:
 
 #### i. Check for mtime conflict
 
@@ -854,7 +876,9 @@ Read all files listed in `vault_context.existing_notes_found` using the Read too
 
 #### iii. Read full source content
 
-For each URL in this note's `source_urls`, find the matching entry in `fetch_results.fetched` and get its full `content`. This is the source material for writing.
+For each URL in this note's `source_urls`, look it up in `STATE_DIR/fetch_results_aggregated.json` (produced by Stage 7a) -- use the `by_url` index for O(1) access, or scan `fetched[]` if you prefer. Get the full `content` field of the matching entry. This is the source material for writing.
+
+If a `source_urls` entry has no match in the aggregated file (e.g., the URL was selected by the search agent but fetch_and_clean.py failed to retrieve it), skip that URL and log a warning. Continue writing the note using the URLs that did fetch successfully.
 
 #### iv. Determine model
 
@@ -963,7 +987,7 @@ update_stage(Path('STATE_DIR'), 'write', {'total_notes': TOTAL, 'completed': COM
 "
 ```
 
-### 7c. Update MOC files
+### 7d. Update MOC files
 
 After all notes are written:
 
@@ -1277,6 +1301,7 @@ When resuming a run (Stage 1 detected an active run and the user chose "Resume")
    - `search_context_hop{N}.json` and `fetch_results_hop{N}.json` (per-hop, from Stage 4)
    - `summaries_hop{N}.json` (per-hop, from Stage 4d) and aggregated `summaries.json` (from Stage 6a)
    - `classification.json` (from Stage 6d)
+   - `fetch_results_aggregated.json` (from Stage 7a -- regenerate if missing on resume into the write stage)
    - `written_notes.json` (from Stage 7)
-3. Skip to the recorded stage. For the `hop_loop` stage, the topics' `current_hop` and `status` fields determine which active topics still need processing -- only un-completed topics dispatch through Stage 4 again. For the `write` stage specifically, check `written_notes.json` to determine which notes are already complete and skip them.
+3. Skip to the recorded stage. For the `hop_loop` stage, the topics' `current_hop` and `status` fields determine which active topics still need processing -- only un-completed topics dispatch through Stage 4 again. For the `write` stage specifically, check `written_notes.json` to determine which notes are already complete and skip them. If `fetch_results_aggregated.json` is missing when resuming into write, re-run the Stage 7a aggregation snippet (it's a pure function of the existing per-hop files).
 4. Continue the pipeline from that point.
