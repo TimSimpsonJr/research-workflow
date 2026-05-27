@@ -1197,6 +1197,77 @@ def test_bump_max_hops(tmp_path):
 
     bump_max_hops(tmp_path, topic_name="X", increment=1)
     assert load_run(tmp_path)["topics"][0]["max_hops"] == 4
+
+
+def test_apply_hop_decision_continue_is_atomic(tmp_path):
+    """apply_hop_decision applies record_hop + set_next_hop + clear replan_hint in one save."""
+    from state import create_run, init_topic, save_state, apply_hop_decision, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    topic = init_topic("X", mode="web_research", depth="standard")
+    topic["replan_hint"] = {"issue": "stale"}  # simulate a prior replan
+    run["topics"] = [topic]
+    save_state(tmp_path, run)
+
+    hop_data = {"hop": 1, "pattern": None, "queries": [], "sources_kept": 5,
+                "ended_at": "2026-05-26T15:00:00Z"}
+    next_hop = {"pattern": "entity_expansion", "from": "Flock Safety", "rationale": "..."}
+    apply_hop_decision(tmp_path, topic_name="X", hop_data=hop_data,
+                       decision="continue", next_hop=next_hop)
+
+    t = load_run(tmp_path)["topics"][0]
+    assert t["hop_genealogy"] == [hop_data]
+    assert t["current_hop"] == 1
+    assert t["next_hop"] == next_hop
+    assert t["replan_hint"] is None  # cleared atomically
+    assert t["status"] == "active"
+
+
+def test_apply_hop_decision_stop_marks_complete(tmp_path):
+    from state import create_run, init_topic, save_state, apply_hop_decision, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    apply_hop_decision(tmp_path, topic_name="X",
+                       hop_data={"hop": 1, "ended_at": "..."},
+                       decision="stop")
+
+    t = load_run(tmp_path)["topics"][0]
+    assert t["current_hop"] == 1
+    assert t["next_hop"] is None
+    assert t["status"] == "complete"
+
+
+def test_apply_hop_decision_replan_stores_hint(tmp_path):
+    from state import create_run, init_topic, save_state, apply_hop_decision, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    hint = {"issue": "thin sources", "suggested_pattern": "entity_expansion",
+            "suggested_query_focus": "official data"}
+    apply_hop_decision(tmp_path, topic_name="X",
+                       hop_data={"hop": 1, "ended_at": "..."},
+                       decision="replan", replan_hint=hint)
+
+    t = load_run(tmp_path)["topics"][0]
+    assert t["current_hop"] == 1
+    assert t["next_hop"] is None
+    assert t["replan_hint"] == hint
+    assert t["status"] == "replan_pending"
+
+
+def test_apply_hop_decision_unknown_raises(tmp_path):
+    import pytest
+    from state import create_run, init_topic, save_state, apply_hop_decision
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    run["topics"] = [init_topic("X", mode="web_research", depth="standard")]
+    save_state(tmp_path, run)
+
+    with pytest.raises(ValueError, match="Unknown decision"):
+        apply_hop_decision(tmp_path, topic_name="X",
+                           hop_data={"hop": 1},
+                           decision="bogus")
 ```
 
 **Step 2: Run to confirm failure.**
@@ -1290,7 +1361,60 @@ def bump_max_hops(state_dir: Path, topic_name: str, increment: int = 1) -> None:
     else:
         raise KeyError(f"Topic not found: {topic_name}")
     save_state(state_dir, run)
+
+
+def apply_hop_decision(
+    state_dir: Path,
+    topic_name: str,
+    hop_data: dict,
+    decision: str,
+    next_hop: dict | None = None,
+    replan_hint: dict | None = None,
+) -> None:
+    """Atomically apply the full state transition for one hop-planner decision.
+
+    Combines record_hop + set_next_hop + set_replan_hint + mark_topic_status
+    into a single load -> mutate -> save cycle so a crash mid-transition
+    cannot leave the topic with partial state (e.g., hop recorded but status
+    still 'active', or next_hop stale relative to the just-completed hop).
+
+    `decision` is one of: "continue", "stop", "early_terminated", "replan".
+
+    Stage 4e of the orchestrator should always call this rather than the
+    per-field setters when applying a hop-planner response.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        raise RuntimeError("No active run")
+    for t in run["topics"]:
+        if t["topic"] == topic_name:
+            # Always: record the hop and advance current_hop
+            t["hop_genealogy"].append(hop_data)
+            t["current_hop"] += 1
+            # Decision-specific transitions
+            if decision == "continue":
+                t["next_hop"] = next_hop
+                t["replan_hint"] = None   # clear any stale replan_hint
+                # status stays "active"
+            elif decision == "stop":
+                t["next_hop"] = None
+                t["status"] = "complete"
+            elif decision == "early_terminated":
+                t["next_hop"] = None
+                t["status"] = "early_terminated"
+            elif decision == "replan":
+                t["next_hop"] = None
+                t["replan_hint"] = replan_hint
+                t["status"] = "replan_pending"
+            else:
+                raise ValueError(f"Unknown decision: {decision!r}")
+            break
+    else:
+        raise KeyError(f"Topic not found: {topic_name}")
+    save_state(state_dir, run)
 ```
+
+The individual helpers (`record_hop`, `set_next_hop`, `set_replan_hint`, `mark_topic_status`) remain useful for the Stage 5 quality-gate flows where transitions happen piecemeal across multiple stages. `apply_hop_decision` is specifically for Stage 4e where the four mutations form one logical atomic transition.
 
 **Step 4: Run to confirm pass.**
 
@@ -3160,26 +3284,38 @@ vault_index_path: {VAULT}/.research-workflow/vault.db
 scripts_dir: SCRIPTS
 ```
 
-Parse each hop-planner response. All three branches first call `record_hop()` to persist what just happened, then differ in what they persist for the future:
+Parse each hop-planner response. **Apply the full transition atomically via `apply_hop_decision()`** — never via the per-field setters in this stage. This ensures a crash partway through the transition cannot leave a topic with hop recorded but status / routing fields stale.
 
-- `decision == "continue"`:
-  - `record_hop(topic, hop_data)` — persists the just-completed hop into genealogy and increments current_hop.
-  - `set_next_hop(topic, response.next_hop)` — persists the planner's chosen pattern/from for Stage 4a to read on the next iteration.
-  - `set_replan_hint(topic, None)` — clears any stale hint from a prior aborted replan.
-  - Topic stays `active` for the next hop level.
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from state import apply_hop_decision
+from pathlib import Path
+state_dir = Path('STATE_DIR')
+# HOP_PLANNER_RESPONSE is the parsed JSON from this topic's hop-planner dispatch
+# HOP_DATA is the just-completed hop's record (hop number, pattern, queries, sources_kept, ended_at, ...)
+decision = HOP_PLANNER_RESPONSE['decision']  # one of: continue, stop, replan
+# early_terminated is a special form of stop set when Stage 4a's alternate-pattern
+# attempt also failed; the hop-planner doesn't emit it directly — the orchestrator
+# substitutes it before calling apply_hop_decision.
+apply_hop_decision(
+    state_dir,
+    topic_name='TOPIC',
+    hop_data=HOP_DATA,
+    decision=decision,
+    next_hop=HOP_PLANNER_RESPONSE.get('next_hop'),       # used only when decision='continue'
+    replan_hint=HOP_PLANNER_RESPONSE.get('replan_hint'), # used only when decision='replan'
+)
+"
+```
 
-- `decision == "stop"`:
-  - `record_hop(topic, hop_data)` — persists the just-completed hop.
-  - `set_next_hop(topic, None)` — no future hop.
-  - `mark_topic_status(topic, "complete")`.
+What each decision atomically does:
 
-- `decision == "replan"`:
-  - `record_hop(topic, hop_data)` — still persists the just-completed hop. The replan path doesn't discard history.
-  - `set_next_hop(topic, None)` — the future direction comes from the replan_hint, not next_hop.
-  - `set_replan_hint(topic, response.replan_hint)` — persists the planner's diagnosis for Stage 5 to read.
-  - `mark_topic_status(topic, "replan_pending")`. The quality gate (Stage 5) handles re-admission.
-
-For early-termination cases (Stage 4a returned zero sources after one alternate pattern attempt), the hop-planner can also return `decision: "stop"` with `status: "early_terminated"` — same as `stop` above, but call `mark_topic_status(topic, "early_terminated")` instead of `"complete"`.
+- `continue`: appends `hop_data` to genealogy, increments `current_hop`, sets `next_hop` to the planner's pick, clears `replan_hint`, leaves status `active`.
+- `stop`: appends `hop_data`, increments `current_hop`, clears `next_hop`, sets status `complete`.
+- `early_terminated` (orchestrator-substituted when Stage 4a's alternate-pattern attempt produced zero usable sources): same as `stop` but sets status `early_terminated`.
+- `replan`: appends `hop_data`, increments `current_hop`, clears `next_hop`, sets `replan_hint` to the planner's diagnosis, sets status `replan_pending`. Stage 5 handles re-admission.
 
 ### 4f. Persist hop-planner's quality signals
 
