@@ -3062,17 +3062,28 @@ while any(t.status == "active" and t.current_hop < t.max_hops for t in run.topic
 
 ### 4a. Search (parallel across topics)
 
-For each active topic:
-- Hop 1: dispatch search-agent normally with `topic`, `existing_urls`, `depth`.
-- Hop 2+: dispatch search-agent with additional `hop_context` parameter:
-  - `pattern`: the next_hop.pattern from this topic's prior hop-planner output
-  - `from`: the next_hop.from value (an entity or concept to focus on)
+For each active topic, choose hop_context based on how the topic got admitted at this iteration:
+
+- **Hop 1 (fresh topic):** dispatch search-agent normally with `topic`, `existing_urls`, `depth`. No hop_context preamble.
+
+- **Hop 2+ following a hop-planner `continue` decision:** the prior hop-planner returned `next_hop` with a pattern and "from" entity. Use those:
+  - `pattern`: prior hop-planner's `next_hop.pattern`
+  - `from`: prior hop-planner's `next_hop.from`
   - `seen_urls`: the topic's seen_urls list
 
-The search-agent's prompt template doesn't change, but the orchestrator prepends a hop-context preamble for hop 2+:
+- **Hop following a quality-gate replan (Stage 5b or 5c re-admission):** the topic has a stored `replan_hint` instead of a prior `next_hop`. Use the hint's fields:
+  - `pattern`: `topic.replan_hint.suggested_pattern`
+  - `from`: `topic.replan_hint.suggested_query_focus` (treated as the focus topic/entity for the search)
+  - `seen_urls`: the topic's seen_urls list
+  - Optional: include the `issue` field as a brief addition to the preamble (e.g., "previous gap: thin sources")
+
+  After consuming `replan_hint`, the orchestrator clears it via `set_replan_hint(topic, None)` so subsequent continue hops don't re-trigger the same focus.
+
+The search-agent's prompt template doesn't change. The orchestrator prepends a hop-context preamble for hop 2+:
 
 ```
 HOP CONTEXT: This is hop {N} of {max_hops} for topic "{topic}". Use the {pattern} pattern, focusing on "{from}". Skip URLs in seen_urls.
+{if replan_hint: "Previous gap: " + replan_hint.issue}
 ```
 
 Batch dispatches at ≤5 topics per round.
@@ -3198,6 +3209,18 @@ failing_topics = [t for t in run["topics"] if not topic_passes(t)]
 
 If `failing_topics` is empty: proceed to Stage 6 (classify).
 
+For diagnostic display and the low-confidence note marker, also compute a "worst-case confidence" proxy across the run:
+
+```python
+worst_confidence = min(
+    (t["confidence_history"][-1] if t["confidence_history"] else 0.0
+     for t in run["topics"]),
+    default=0.0,
+)
+```
+
+This is the value used downstream as `OVERALL_CONFIDENCE` in Stage 5c's user-decision payload and 5d's `final_confidence_score`. There is no single "run target" because depths are per-topic, but the worst-topic confidence is the meaningful number to surface in user prompts and frontmatter callouts.
+
 ### 5b. Auto-replan (if eligible)
 
 If `failing_topics` is non-empty AND `replan_count < 2`, run an auto-replan cycle:
@@ -3266,7 +3289,13 @@ record_user_decision(Path('STATE_DIR'), decision='DECISION_VALUE', confidence=OV
 
 Branch by decision:
 
-- **`replan`**: call `increment_replan` once more (reaching 3). Re-mark active. Return to Stage 4. After this attempt, no more replans — if it fails again, present continue/abandon only.
+- **`replan`**: apply the same re-admission recipe as Stage 5b (so the topic actually makes it back into the hop loop):
+  - For each failing topic, if `replan_hint` is None, synthesize one (the user may also supply a manual hint via free-text input — capture it as the `issue` field).
+  - Call `bump_max_hops(topic, increment=1)` so `current_hop < max_hops` again.
+  - Call `mark_topic_status(topic, "active")`.
+  - Call `increment_replan(STATE_DIR)` once more (reaching 3).
+
+  Return to Stage 4. After this attempt, no more replans — if it fails again, present continue/abandon only.
 - **`continue`**: mark the run with `low_confidence = true` (see 5d). Proceed to Stage 6. The write stage adds body callouts to all written notes.
 - **`abandon`**: set `abandoned_at_gate: true` in the run dict, save, then call `abandon_run(STATE_DIR)` (which already exists in state.py and archives via `_archive_run`). Print the archived path so the user can inspect:
 
