@@ -2,14 +2,14 @@
 
 ## What this is
 
-A Claude Code plugin for deep research into Obsidian vaults. The `/research` skill is the main entry point — it orchestrates an 8-stage pipeline: resolve, search, fetch, media, summarize, classify, write, discover. Three modes: single topic, batch, and thread-pull.
+A Claude Code plugin for deep research into Obsidian vaults. The `/research` skill is the main entry point — it orchestrates a multi-hop pipeline with depth profiles, confidence-based replanning, and source credibility tiering. Stages: triage, resolve, hop loop (search/fetch/media/summarize/hop-planner per hop), quality gate, classify, write, wikilink scan, discover threads, complete. Three modes: single topic, batch, and thread-pull. Three planning strategies: planning_only (clear queries), intent_planning (ambiguous), unified (batch / full plan presentation).
 
 ## Architecture
 
 - **Plugin** (`plugin.json`): Declares skills and agents for Claude Code discovery. No direct Claude API calls — everything goes through Claude Code's Task tool and Bash.
 - **Skills** (`skills/`): Claude Code skill definitions (Markdown). The orchestrator (`research`) dispatches Haiku subagents defined in `agents/`. The setup wizard (`research-setup`) handles first-run configuration.
-- **Agents** (`agents/`): Haiku subagent definitions read by the research skill at runtime and passed as prompts via the Task tool. Four agents: topic-resolver, search-agent, classify-agent, thread-discoverer.
-- **Scripts** (`scripts/`): Python tools for I/O, caching, and extraction only. No Claude API calls.
+- **Agents** (`agents/`): Subagent definitions read by the research skill at runtime and passed as prompts via the Task tool. Six agents: topic-resolver (Sonnet), hop-planner (Sonnet), search-agent (Haiku), classify-agent (Haiku), thread-discoverer (Haiku), wikilink-scanner (Haiku). Sonnet handles reasoning-heavy stages (intent parsing, between-hop decisions); Haiku handles parallel-friendly stages (search, classify, summarize fallback, discover, wikilink scan).
+- **Scripts** (`scripts/`): Python tools for I/O, caching, extraction, and pure-Python math. No Claude API calls. `confidence.py` is the pure-Python formula library (depth profiles, confidence/contradiction scoring) shared by the hop-planner agent and `state.py`.
 - **Config** (`config_manager.py`): JSON-based vault config stored at `{vault}/.research-workflow/config.json`. Replaces the old `config.py` + `.env` pattern.
 - **State** (`state.py`): Pipeline checkpoints with crash recovery. The skill checkpoints after every stage and can resume from the last completed stage.
 - **Prompts** (`scripts/prompts/`): Text templates for summarization and synthesis. See `scripts/prompts/README.md` for the assembly pattern.
