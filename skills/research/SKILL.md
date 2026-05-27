@@ -472,7 +472,7 @@ python "SCRIPTS/summarize.py" --input "STATE_DIR/fetch_results_hop{N}.json" --mo
 python "SCRIPTS/summarize.py" --input "STATE_DIR/fetch_results_hop{N}.json" --prepare-for-claude --output-dir "STATE_DIR/summaries_hop{N}/"
 ```
 
-Then dispatch a Haiku subagent per article file (same prompt as v2 base-tier path), collect into `summaries_hop{N}.json` with shape `{"topic": "{project name}", "items": [...]}`. Populate `media_refs` from the per-hop media manifest.
+Then dispatch a Haiku subagent per article file (same prompt as v2 base-tier path), collect into `summaries_hop{N}.json` with shape `{"topic": "{project name}", "items": [...]}`. Leave each summary's `media_refs` empty -- media assets are already inlined into the rewritten article content as Obsidian embeds during Stage 4c, so the write stage picks them up directly from the per-hop fetch_results without needing a separate manifest.
 
 ### 4e. Hop-planner (parallel per-topic)
 
