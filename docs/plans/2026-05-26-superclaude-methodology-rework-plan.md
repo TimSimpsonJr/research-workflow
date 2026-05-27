@@ -64,36 +64,70 @@ Confirm there are exactly two relevant lines: `import config`, `from utils impor
 
 **Step 2: Replace the legacy imports + call with config_manager**
 
-Edit `scripts/find_broken_links.py`:
-- Remove: `import config`
-- Remove: `from utils import startup_checks`
-- Replace the `startup_checks()` call with an inline vault-path existence check using `config_manager`:
+Edit `scripts/find_broken_links.py`. Two key rules:
+
+1. **Remove `import config` and `from utils import startup_checks` from module scope.** These are at the top of the file (lines 19-20) and cause `ImportError`/`sys.exit(1)` cascade when tests import the module's helper functions.
+2. **Add a `--vault` argument and do the config lookup inside `main()` only.** The helpers (`extract_links`, `normalize_link`, `build_note_index`, `find_broken_links`) stay importable without any side-effects.
+
+Replace the existing `main()` function (lines 61-76) with:
 
 ```python
-from config_manager import load_config
+def main():
+    import argparse
+    from config_manager import load_config
 
-cfg = load_config(Path.cwd())
-if cfg is None:
-    print("Error: No vault configured. Run /research-setup first.", file=sys.stderr)
-    sys.exit(1)
-VAULT_PATH = Path(cfg["vault_root"])
-if not VAULT_PATH.exists():
-    print(f"Error: VAULT_PATH does not exist: {VAULT_PATH}", file=sys.stderr)
+    parser = argparse.ArgumentParser(description="Find broken wiki-links in an Obsidian vault.")
+    parser.add_argument(
+        "--vault",
+        type=Path,
+        default=Path.cwd(),
+        help="Vault root path (defaults to current directory)",
+    )
+    args = parser.parse_args()
+
+    cfg = load_config(args.vault)
+    if cfg is None:
+        console.print(f"[red]Error:[/red] No research-workflow config found under {args.vault}. "
+                      f"Run /research-setup first, or pass --vault PATH.")
+        sys.exit(1)
+
+    vault_path = Path(cfg["vault_root"])
+    if not vault_path.exists():
+        console.print(f"[red]Error:[/red] vault_root does not exist: {vault_path}")
+        sys.exit(1)
+
+    broken = find_broken_links(vault_path)
+
+    if not broken:
+        console.print("[green]No broken links found.[/green]")
+        sys.exit(0)
+
+    table = Table(title=f"Broken Wiki-Links ({len(broken)} found)")
+    table.add_column("File", style="cyan")
+    table.add_column("Broken Link", style="red")
+    for item in broken:
+        rel = item["file"].relative_to(vault_path)
+        table.add_row(str(rel), item["link"])
+    console.print(table)
     sys.exit(1)
 ```
 
-If the script uses any other `config.X` reference (e.g., `config.INBOX_PATH`), replace with the equivalent from the loaded `cfg` dict.
+Also remove from the top of the file:
+```diff
+- import config
+- from utils import startup_checks
+```
 
 **Step 3: Run the script's tests to confirm no regression**
 
 Run: `pytest tests/test_find_broken_links.py -v`
-Expected: PASS (some tests may still have the env-var shim; we remove that in Task 0.5).
+Expected: PASS. (The env-var shim is dropped in Task 0.6; the test imports the module, which now imports cleanly.)
 
 **Step 4: Commit**
 
 ```bash
 git add scripts/find_broken_links.py
-git commit -m "refactor(find_broken_links): drop legacy config/utils, use config_manager"
+git commit -m "refactor(find_broken_links): drop legacy config/utils, use config_manager via --vault arg"
 ```
 
 ### Task 0.3 — Replace `startup_checks` calls in vault_lint.py
@@ -101,14 +135,63 @@ git commit -m "refactor(find_broken_links): drop legacy config/utils, use config
 **Files:**
 - Modify: `scripts/vault_lint.py`
 
-Same pattern as Task 0.2.
+**Step 1: Replace the imports and rewrite main()**
 
-**Step 1: Replace the imports and call**
+Same pattern as Task 0.2 — remove module-scope `import config` and `from utils import startup_checks`. Replace the existing `main()` (lines 79-116) with:
 
-Edit `scripts/vault_lint.py`:
-- Remove: `import config`
-- Remove: `from utils import startup_checks`
-- Replace the `startup_checks()` call with the same inline `config_manager` pattern from Task 0.2.
+```python
+def main():
+    from config_manager import load_config
+
+    parser = argparse.ArgumentParser(description="Find notes missing required frontmatter.")
+    parser.add_argument("--vault", type=Path, default=Path.cwd(),
+                        help="Vault root path (defaults to current directory)")
+    parser.add_argument("--folder", help="Subfolder within vault to lint (default: whole vault)")
+    parser.add_argument("--fix", action="store_true", help="Interactively fix missing fields")
+    args = parser.parse_args()
+
+    cfg = load_config(args.vault)
+    if cfg is None:
+        console.print(f"[red]Error:[/red] No research-workflow config found under {args.vault}. "
+                      f"Run /research-setup first, or pass --vault PATH.")
+        sys.exit(1)
+
+    vault_path = Path(cfg["vault_root"])
+    frontmatter_fields = cfg.get("frontmatter_fields", ["title", "source", "tags", "created"])
+
+    target = (vault_path / args.folder).resolve() if args.folder else vault_path
+    vault_resolved = vault_path.resolve()
+    if not str(target).startswith(str(vault_resolved)):
+        console.print(f"[red]Folder escapes vault path: {args.folder}[/red]")
+        sys.exit(1)
+    if not target.exists():
+        console.print(f"[red]Folder not found: {target}[/red]")
+        sys.exit(1)
+
+    issues = lint_vault(target, frontmatter_fields)
+
+    if not issues:
+        console.print("[green]No issues found.[/green]")
+        sys.exit(0)
+
+    table = Table(title=f"Frontmatter Issues ({len(issues)} notes)")
+    table.add_column("File", style="cyan")
+    table.add_column("Missing Fields", style="red")
+    for issue in issues:
+        rel = issue["file"].relative_to(vault_path)
+        table.add_row(str(rel), ", ".join(issue["missing"]))
+    console.print(table)
+
+    if args.fix:
+        for issue in issues:
+            console.print(f"\n[bold]{issue['file'].name}[/bold]")
+            fix_issue(issue["file"], issue["missing"])
+        console.print("[green]Done fixing issues.[/green]")
+
+    sys.exit(1)
+```
+
+The `config.FRONTMATTER_FIELDS` reference at the old line 96 is replaced with a value read from the JSON config (`cfg.get("frontmatter_fields", ...)`). If the JSON config doesn't carry this field today, add it to the default config schema in `config_manager.default_config()` in a small follow-up edit within this same task.
 
 **Step 2: Run vault_lint tests**
 
@@ -118,8 +201,8 @@ Expected: PASS.
 **Step 3: Commit**
 
 ```bash
-git add scripts/vault_lint.py
-git commit -m "refactor(vault_lint): drop legacy config/utils, use config_manager"
+git add scripts/vault_lint.py scripts/config_manager.py
+git commit -m "refactor(vault_lint): drop legacy config/utils, use config_manager via --vault arg"
 ```
 
 ### Task 0.4 — Delete utils.py (now unused)
@@ -770,15 +853,29 @@ def test_create_run_writes_version(tmp_path):
 
 In `scripts/state.py`:
 - Add at top-level: `STATE_VERSION = 3`
+- Add `import sys` at the top (next to `import json`/`import shutil`). Subsequent tasks (2.2, 2.6, etc.) reference `sys.stderr` and `sys.exit`; the current file does not import `sys`.
+- Add a new public helper next to `_atomic_write`:
+
+```python
+def save_state(state_dir: Path, run: dict) -> None:
+    """Save the active run state atomically. Public wrapper around _atomic_write."""
+    _atomic_write(state_dir / CURRENT_RUN_FILE, run)
+```
+
+  This helper is consumed by every subsequent task in Phase 2 (2.4, 2.5, 2.6, 2.7) and by SKILL.md stages. Introducing it here avoids the dependency-order trap of using it in 2.4 before it's defined.
+
 - In `create_run()`, include `"version": STATE_VERSION` in the returned dict and written JSON.
 
 **Step 5: Run to confirm pass.**
+
+Run: `pytest tests/test_state.py -v`
+Expected: existing tests still pass (the new STATE_VERSION constant is additive, `save_state` is an additive helper, version field is additive in `create_run` returns).
 
 **Step 6: Commit**
 
 ```bash
 git add scripts/state.py tests/test_state.py
-git commit -m "feat(state): bump schema to v3"
+git commit -m "feat(state): bump schema to v3 + add save_state helper + import sys"
 ```
 
 ### Task 2.2 — Schema-mismatch drop on load
@@ -793,9 +890,9 @@ def test_load_run_drops_old_schema(tmp_path, capsys):
     state_file.write_text(json.dumps({"run_id": "old", "version": 2, "tier": "full"}))
     result = load_run(tmp_path)
     assert result is None
-    out = capsys.readouterr().out
-    assert "older schema" in out.lower()
-    # The state file should have been abandoned (renamed or removed)
+    err = capsys.readouterr().err   # message goes to stderr (see implementation)
+    assert "older schema" in err.lower()
+    # The state file should have been moved out (abandoned to history/)
     assert not (tmp_path / "current_run.json").exists()
 
 
@@ -813,13 +910,11 @@ Add `import json` if missing.
 
 **Step 3: Implement**
 
-In `scripts/state.py`, modify `load_run()`:
-- After reading the JSON, check `data.get("version", 0)`.
-- If `!= STATE_VERSION`, print message and call `abandon_run()` (or move the file to `state/abandoned/`), then return `None`.
+In `scripts/state.py`, modify `load_run()`. The schema-mismatch branch must archive the file **without** calling `abandon_run()`, because `abandon_run` → `_archive_run` → `load_run` would recurse infinitely on a stale-version file.
 
 ```python
 def load_run(state_dir: Path) -> dict | None:
-    state_file = state_dir / "current_run.json"
+    state_file = state_dir / CURRENT_RUN_FILE
     if not state_file.exists():
         return None
     try:
@@ -832,12 +927,20 @@ def load_run(state_dir: Path) -> dict | None:
             f"and has been abandoned. Run /research to start fresh.",
             file=sys.stderr,
         )
-        abandon_run(state_dir)
+        # Archive in-place without recursing through abandon_run → _archive_run → load_run
+        old_id = data.get("run_id", "unparseable")
+        history_dir = state_dir / "history" / f"{old_id}-stale-v{data.get('version', 'unknown')}"
+        history_dir.mkdir(parents=True, exist_ok=True)
+        for f in state_dir.glob("*.json"):
+            shutil.move(str(f), str(history_dir / f.name))
         return None
     return data
 ```
 
 **Step 4: Run to confirm pass.**
+
+Run: `pytest tests/test_state.py -v`
+Expected: both new tests pass, all existing tests still pass.
 
 **Step 5: Commit.**
 
@@ -1015,19 +1118,34 @@ def test_add_usage_accumulates(tmp_path):
 
 **Step 3: Implement**
 
-In `create_run()`, initialize the usage block.
-Add `add_usage()`:
+In `create_run()`, initialize the usage block. The `ollama` bucket only has `"calls"` — no token fields — because Ollama is local and there's nothing to bill or budget:
+
+```python
+"usage": {
+    "haiku":  {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+    "sonnet": {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+    "opus":   {"calls": 0, "in_tokens": 0, "out_tokens": 0},
+    "ollama": {"calls": 0},
+}
+```
+
+Add `add_usage()`. Use `dict.get(key, 0) +` rather than `+=` so the ollama bucket (which lacks token keys) doesn't `KeyError`:
 
 ```python
 def add_usage(state_dir: Path, model: str, in_tokens: int, out_tokens: int, stage: str) -> None:
-    """Increment per-model usage counters for the active run."""
+    """Increment per-model usage counters for the active run.
+
+    Safe against missing buckets and missing keys (the ollama bucket has no
+    token fields by design — local inference has no token cost).
+    """
     run = load_run(state_dir)
     if run is None:
         return  # silently ignore — telemetry shouldn't block the pipeline
-    bucket = run["usage"].setdefault(model, {"calls": 0, "in_tokens": 0, "out_tokens": 0})
-    bucket["calls"] += 1
-    bucket["in_tokens"] += in_tokens
-    bucket["out_tokens"] += out_tokens
+    bucket = run["usage"].setdefault(model, {"calls": 0})
+    bucket["calls"] = bucket.get("calls", 0) + 1
+    if model != "ollama":
+        bucket["in_tokens"] = bucket.get("in_tokens", 0) + in_tokens
+        bucket["out_tokens"] = bucket.get("out_tokens", 0) + out_tokens
     save_state(state_dir, run)
 ```
 
@@ -1105,34 +1223,101 @@ def record_user_decision(state_dir: Path, decision: str, **details) -> None:
 
 **Step 5: Commit.**
 
-### Task 2.8 — Archive sweeps per-hop intermediate files
+### Task 2.8 — Archive sweeps per-hop intermediate files (compatible with existing `_archive_run`)
 
-**Step 1: Write the failing test**
+**Important:** The existing `_archive_run` (private) archives to `history/{run_id}/` and is called by `abandon_run` and `complete_run`. Existing tests assert this path. **Do NOT rename it to `archive_run` or change the destination to `archive/`.** We're adding per-hop sweeping to the existing function and keeping the API contract intact.
+
+The good news: `_archive_run` already iterates `state_dir.glob("*.json")`, which transparently picks up any per-hop files written into the state dir (e.g., `fetch_results_hop1.json`). The only "fix" needed is to verify the existing implementation handles per-hop files correctly — no code change required for sweep behavior, just a test that pins the contract.
+
+**Step 1: Write the failing test (against existing `_archive_run` via the public `abandon_run`)**
 
 ```python
-def test_archive_run_sweeps_hop_files(tmp_path):
-    from state import create_run, save_state, archive_run
-    run = create_run(tmp_path, run_id="2026-05-26-test", tier="full")
-    save_state(tmp_path, run)
+def test_abandon_run_sweeps_hop_intermediate_files(tmp_path):
+    from state import create_run, abandon_run
+    create_run(tmp_path, run_id="2026-05-26-hop-test", tier="full")
 
     # Simulate per-hop intermediate files
     (tmp_path / "fetch_results_hop1.json").write_text("{}")
     (tmp_path / "fetch_results_hop2.json").write_text("{}")
     (tmp_path / "summaries_hop1.json").write_text("{}")
     (tmp_path / "search_context_hop1.json").write_text("{}")
-    (tmp_path / "classification.json").write_text("{}")
 
-    archive_run(tmp_path)
+    abandon_run(tmp_path)
 
-    # All run files should be moved under archive/{run_id}/
-    archive_dir = tmp_path / "archive" / "2026-05-26-test"
-    assert archive_dir.exists()
-    assert (archive_dir / "fetch_results_hop1.json").exists()
-    assert (archive_dir / "fetch_results_hop2.json").exists()
-    assert (archive_dir / "summaries_hop1.json").exists()
-    assert (archive_dir / "search_context_hop1.json").exists()
-    assert (archive_dir / "classification.json").exists()
+    # All per-hop files land alongside current_run.json under history/{run_id}/
+    history_dir = tmp_path / "history" / "2026-05-26-hop-test"
+    assert history_dir.exists()
+    assert (history_dir / "fetch_results_hop1.json").exists()
+    assert (history_dir / "fetch_results_hop2.json").exists()
+    assert (history_dir / "summaries_hop1.json").exists()
+    assert (history_dir / "search_context_hop1.json").exists()
     # Active run file should be gone
+    assert not (tmp_path / "current_run.json").exists()
+```
+
+**Step 2: Run to confirm — likely passes already**
+
+Run: `pytest tests/test_state.py::test_abandon_run_sweeps_hop_intermediate_files -v`
+
+If it passes immediately: the existing `state_dir.glob("*.json")` already does the right thing. Skip Step 3.
+
+If it fails (e.g., the existing implementation has a hardcoded list of filenames instead of glob): Step 3 updates `_archive_run` to use `glob`.
+
+**Step 3: Update `_archive_run` if needed**
+
+Confirm `_archive_run` matches:
+
+```python
+def _archive_run(state_dir: Path) -> None:
+    """Move all state-dir JSON files to history/{run_id}/."""
+    run_file = state_dir / CURRENT_RUN_FILE
+    if not run_file.exists():
+        return
+    try:
+        data = json.loads(run_file.read_text(encoding="utf-8"))
+        run_id = data.get("run_id", "unknown")
+    except json.JSONDecodeError:
+        run_id = "unparseable"
+    history_dir = state_dir / "history" / run_id
+    history_dir.mkdir(parents=True, exist_ok=True)
+    for f in state_dir.glob("*.json"):
+        shutil.move(str(f), str(history_dir / f.name))
+```
+
+Two changes vs. the current implementation:
+- Read the JSON directly instead of calling `load_run` (avoids recursion with the schema-mismatch branch in `load_run`).
+- Use a try/except for malformed JSON (defensive — `load_run` does this; keep parity).
+
+**Step 4: Run full test suite**
+
+```bash
+pytest tests/test_state.py -v
+```
+Expected: all existing tests still pass.
+
+**Step 5: Commit**
+
+```bash
+git commit -am "feat(state): archive sweeps per-hop intermediate files (test added; _archive_run handles JSON directly)"
+```
+
+### Task 2.9 — Make `complete_run()` return the final run data
+
+Stage 10 needs to read the final run state for telemetry, hop genealogy display, and case-record generation BEFORE the archive moves the file. Currently `complete_run()` archives immediately and `load_run()` returns None afterward.
+
+**Step 1: Write the failing test**
+
+```python
+def test_complete_run_returns_run_data(tmp_path):
+    from state import create_run, complete_run
+    create_run(tmp_path, run_id="2026-05-26-complete-test", tier="full")
+
+    result = complete_run(tmp_path)
+
+    assert result is not None
+    assert result["run_id"] == "2026-05-26-complete-test"
+    assert "completed_at" in result
+    # The file is gone (archived)
     assert not (tmp_path / "current_run.json").exists()
 ```
 
@@ -1140,29 +1325,29 @@ def test_archive_run_sweeps_hop_files(tmp_path):
 
 **Step 3: Implement**
 
-Modify `archive_run()` in `scripts/state.py` to sweep all JSON files in the state dir (except the archive subdir itself) into `archive/{run_id}/`. Match patterns like `search_context_hop*.json`, `fetch_results_hop*.json`, `summaries_hop*.json`, plus the standard files (`classification.json`, `written_notes.json`, `research_plan.json`, `current_run.json`).
+Modify `complete_run` in `scripts/state.py`:
 
 ```python
-import shutil
-
-
-def archive_run(state_dir: Path) -> None:
-    """Move all run files into archive/{run_id}/ and clear active state."""
+def complete_run(state_dir: Path) -> dict | None:
+    """Archive completed run to history. Returns the final run dict (with completed_at) before archiving."""
     run = load_run(state_dir)
-    run_id = run["run_id"] if run else "unknown"
-    dest = state_dir / "archive" / run_id
-    dest.mkdir(parents=True, exist_ok=True)
-
-    for f in state_dir.iterdir():
-        if f.is_file() and f.suffix == ".json":
-            shutil.move(str(f), str(dest / f.name))
+    if run:
+        run["completed_at"] = datetime.now(timezone.utc).isoformat()
+        _atomic_write(state_dir / CURRENT_RUN_FILE, run)
+    _archive_run(state_dir)
+    return run
 ```
 
-**Step 4: Run to confirm pass.**
+Only the return type changes (was `-> None`). The behavior order — write completed-at, then archive — is unchanged. All existing callers ignore the return value, so this is backwards-compatible.
+
+**Step 4: Run full state tests**
+
+Run: `pytest tests/test_state.py -v`
+Expected: all pass, including any existing tests that called `complete_run` without expecting a return.
 
 **Step 5: Commit.**
 
-### Task 2.9 — Case-record writer stub (Stage B prep)
+### Task 2.10 — Case-record writer stub (Stage B prep)
 
 Stage A writes case records at completion; nothing reads them yet.
 
@@ -1280,22 +1465,34 @@ Note: Playwright is OPTIONAL — it doesn't downgrade the tier (full tier doesn'
 - Create: `scripts/fetch_playwright.py`
 - Create: `tests/test_fetch_playwright.py`
 
+The existing fetch API in `scripts/fetch_and_clean.py` is **tuple-based**:
+
+```python
+fetch_via_jina(url, api_key)     -> (content, title)
+fetch_via_wayback(url, api_key)  -> (content, title)
+fetch_url(url, jina_api_key)     -> (content, title, method)   # main composer
+```
+
+To compose, `fetch_via_playwright` returns the same `(content, title)` shape:
+
 **Step 1: Write the failing test**
 
 ```python
 # tests/test_fetch_playwright.py
+import sys
 import pytest
 
 
-def test_playwright_unavailable_returns_none(monkeypatch):
-    """When playwright isn't installed, fetch returns None gracefully."""
-    import sys
+def test_playwright_unavailable_raises(monkeypatch):
+    """When playwright module isn't installed, fetch_via_playwright raises ImportError-like RuntimeError."""
     monkeypatch.setitem(sys.modules, "playwright", None)
     monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
-    from fetch_playwright import fetch_with_playwright
-    result = fetch_with_playwright("https://example.com")
-    assert result is None
+    from fetch_playwright import fetch_via_playwright
+    with pytest.raises(RuntimeError, match="playwright not available"):
+        fetch_via_playwright("https://example.com")
 ```
+
+The function raises (not returns None) when playwright is unavailable, so callers can distinguish "tried Playwright and it's not installed" from "tried Playwright and the page failed". This matches `fetch_url`'s try/except pattern.
 
 **Step 2: Run to confirm failure (module doesn't exist).**
 
@@ -1305,19 +1502,19 @@ def test_playwright_unavailable_returns_none(monkeypatch):
 # scripts/fetch_playwright.py
 """fetch_playwright.py — JS-heavy page extraction fallback.
 
-Only invoked when Jina returns empty/blocked content. Imports Playwright
-lazily so the rest of the pipeline runs fine when Playwright isn't installed.
+Used by fetch_and_clean.fetch_url() as a fallback when Jina and Wayback both fail.
+Returns (content, title) — same shape as fetch_via_jina and fetch_via_wayback.
 """
 
-def fetch_with_playwright(url: str, timeout_ms: int = 15000) -> str | None:
-    """Fetch and extract text content from a URL using Playwright.
+def fetch_via_playwright(url: str, timeout_ms: int = 15000) -> tuple[str, str]:
+    """Fetch a URL with Playwright. Returns (content, title).
 
-    Returns None if Playwright isn't installed or the page fails to load.
+    Raises RuntimeError if Playwright isn't installed or the page fails to load.
     """
     try:
         from playwright.sync_api import sync_playwright
-    except ImportError:
-        return None
+    except ImportError as e:
+        raise RuntimeError("playwright not available") from e
 
     try:
         with sync_playwright() as p:
@@ -1325,106 +1522,116 @@ def fetch_with_playwright(url: str, timeout_ms: int = 15000) -> str | None:
             page = browser.new_page()
             page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
             content = page.content()
+            title = page.title() or ""
             browser.close()
-            return content
-    except Exception:
-        return None
+            return content, title
+    except Exception as e:
+        raise RuntimeError(f"playwright fetch failed: {e}") from e
 ```
 
 **Step 4: Run to confirm pass.**
 
 **Step 5: Commit.**
 
-### Task 3.3 — Wire Playwright into fetch_and_clean.py
+### Task 3.3 — Wire Playwright into `fetch_url()` (the existing composer)
 
 **Files:**
 - Modify: `scripts/fetch_and_clean.py`
 - Modify: `tests/test_fetch_and_clean.py`
 
-**Step 1: Read the current fetch path**
+**Important:** `fetch_url()` at [scripts/fetch_and_clean.py:210-228](../../scripts/fetch_and_clean.py:210) is the single per-URL composer used by BOTH `process_urls` (serial) and `_fetch_single` (parallel worker). Wire Playwright as a fallback INSIDE `fetch_url` so both callers benefit without duplication. Do NOT introduce a parallel `fetch_one_url()` function — that would skip the parallel path.
 
-Run: `grep -n "def fetch\|jina\|empty\|blocked" scripts/fetch_and_clean.py`
-
-Identify where Jina is called and where an "empty result" is detected (look for short-content checks, response.text empty checks, or specific error messages).
-
-**Step 2: Write the failing test**
+**Step 1: Write the failing test**
 
 Append to `tests/test_fetch_and_clean.py`:
 
 ```python
-def test_jina_empty_falls_back_to_playwright(monkeypatch):
-    """When Jina returns empty content, Playwright fallback should be tried."""
-    from fetch_and_clean import fetch_one_url
+def test_fetch_url_falls_back_to_playwright_when_jina_and_wayback_fail(monkeypatch):
+    """When both Jina and Wayback fail, fetch_url uses Playwright as the final fallback."""
+    from fetch_and_clean import fetch_url
 
-    # Mock Jina to return empty
-    def fake_jina_fetch(url, **kw):
-        return {"content": "", "status": "empty"}
-    monkeypatch.setattr("fetch_and_clean.fetch_via_jina", fake_jina_fetch)
+    def jina_fails(url, key=None):
+        raise RuntimeError("jina down")
+    def wayback_fails(url, key=None):
+        raise RuntimeError("no wayback snapshot")
+    def playwright_succeeds(url, **kw):
+        return ("Real JS-page content here, longer than 200 chars. " * 10, "JS Page Title")
 
-    # Mock Playwright to return real-looking content
-    monkeypatch.setattr(
-        "fetch_and_clean.fetch_with_playwright",
-        lambda url, **kw: "<html><body>Real content from JS page.</body></html>",
-    )
+    monkeypatch.setattr("fetch_and_clean.fetch_via_jina", jina_fails)
+    monkeypatch.setattr("fetch_and_clean.fetch_via_wayback", wayback_fails)
+    monkeypatch.setattr("fetch_and_clean.fetch_via_playwright", playwright_succeeds)
 
-    result = fetch_one_url("https://example-spa.com")
-    assert result["content"]
-    assert "Real content" in result["content"]
-    assert result["fetcher"] == "playwright"
+    content, title, method = fetch_url("https://example-spa.com")
+    assert "Real JS-page content" in content
+    assert title == "JS Page Title"
+    assert method == "playwright"
 
 
-def test_jina_success_skips_playwright(monkeypatch):
-    """When Jina returns good content, Playwright should not be invoked."""
-    from fetch_and_clean import fetch_one_url
+def test_fetch_url_skips_playwright_when_jina_succeeds(monkeypatch):
+    """When Jina returns content, Playwright must not be invoked."""
+    from fetch_and_clean import fetch_url
 
     monkeypatch.setattr(
         "fetch_and_clean.fetch_via_jina",
-        lambda url, **kw: {"content": "Plenty of content from Jina.", "status": "ok"},
+        lambda url, key=None: ("Jina content. " * 50, "Jina Title"),
     )
-
-    played = []
+    called = []
     monkeypatch.setattr(
-        "fetch_and_clean.fetch_with_playwright",
-        lambda url, **kw: played.append(url) or None,
+        "fetch_and_clean.fetch_via_playwright",
+        lambda url, **kw: called.append(url) or ("", ""),
     )
 
-    result = fetch_one_url("https://example.com")
-    assert result["fetcher"] == "jina"
-    assert played == []  # Playwright never invoked
+    content, title, method = fetch_url("https://example.com")
+    assert method == "jina"
+    assert called == []  # Playwright never invoked
 ```
 
-(Adjust function names if `fetch_one_url` is actually named differently — check the current source.)
+**Step 2: Run to confirm failure (no Playwright fallback wired yet).**
 
-**Step 3: Run to confirm failure (no fallback wired yet).**
-
-**Step 4: Implement**
+**Step 3: Implement**
 
 In `scripts/fetch_and_clean.py`:
 
-1. Add at top: `from fetch_playwright import fetch_with_playwright`
-2. Find the per-URL fetch function. After Jina returns, check whether `content` is empty or below a minimum length threshold. If so, try Playwright. Return a result dict that includes a `fetcher` field (`"jina"` or `"playwright"` or `"failed"`).
+1. Add at top: `from fetch_playwright import fetch_via_playwright`
+2. Extend `fetch_url()` (lines 210-228) to add a Playwright fallback AFTER the Wayback fallback:
 
 ```python
-MIN_CONTENT_LENGTH = 200  # chars; below this, content is likely empty/blocked
+def fetch_url(url: str, jina_api_key: str | None = None) -> tuple[str, str, str]:
+    """
+    Fetch URL content with fallback strategy.
+    Returns (content, title, method) where method is "jina", "wayback", or "playwright".
+    Raises RuntimeError if all methods fail.
+    """
+    try:
+        content, title = fetch_via_jina(url, jina_api_key)
+        return content, title, "jina"
+    except ValueError:
+        raise  # SSRF validation errors should not be retried
+    except Exception as exc:
+        print(f"[fetch_and_clean] Jina fetch failed for {url}: {exc}", file=sys.stderr)
 
-def fetch_one_url(url: str) -> dict:
-    jina_result = fetch_via_jina(url)
-    if jina_result["content"] and len(jina_result["content"]) >= MIN_CONTENT_LENGTH:
-        return {**jina_result, "fetcher": "jina"}
+    try:
+        content, title = fetch_via_wayback(url, jina_api_key)
+        return content, title, "wayback"
+    except Exception as exc:
+        print(f"[fetch_and_clean] Wayback fetch failed for {url}: {exc}", file=sys.stderr)
 
-    # Jina returned nothing useful — try Playwright as fallback
-    pw_content = fetch_with_playwright(url)
-    if pw_content and len(pw_content) >= MIN_CONTENT_LENGTH:
-        return {"content": pw_content, "status": "ok", "fetcher": "playwright"}
-
-    return {"content": "", "status": "failed", "fetcher": "failed"}
+    # Final fallback: Playwright (only if installed)
+    try:
+        content, title = fetch_via_playwright(url)
+        return content, title, "playwright"
+    except Exception as e:
+        raise RuntimeError(f"All fetch methods failed for {url}") from e
 ```
 
-Adjust to match the actual existing function signature and return shape — preserve any other fields (like `final_url`, `title`, etc.).
+The function signature, return type, and existing call sites in `process_urls`/`_fetch_single` are unchanged — they receive `(content, title, "playwright")` exactly the same way they receive `(content, title, "jina")`. The `method` field already propagates into the fetched URL records, so the new value will surface naturally in telemetry.
 
-**Step 5: Run to confirm pass.**
+**Step 4: Run to confirm pass.**
 
-**Step 6: Commit.**
+Run: `pytest tests/test_fetch_and_clean.py -v`
+Expected: all tests pass, including the two new ones. Existing tests are unaffected because they don't trigger the Playwright path.
+
+**Step 5: Commit.**
 
 ---
 
@@ -1892,18 +2099,43 @@ def test_intent_planning_response():
     assert len(parsed["clarifying_questions"]) <= 3
 
 
-def test_depth_values_valid():
+def test_depth_value_in_response_is_valid():
+    """A topic's depth field must be one of the four valid profile names."""
+    response = json.dumps({
+        "project": "X",
+        "strategy": "planning_only",
+        "shared_context_files": [],
+        "topics": [{"topic": "T", "mode": "web_research", "depth": "standard",
+                    "existing_urls": [], "related_vault_notes": []}],
+        "local_sources": [],
+        "thread_pulls": [],
+        "execution_order": "parallel",
+        "estimated_usage": {},
+    })
+    parsed = json.loads(response)
     valid_depths = {"quick", "standard", "deep", "exhaustive"}
-    for depth in valid_depths:
-        # Sanity: any depth value must be one of these four
-        assert depth in valid_depths
+    for topic in parsed["topics"]:
+        assert topic["depth"] in valid_depths, f"invalid depth: {topic['depth']!r}"
 
 
-def test_strategy_values_valid():
+def test_strategy_value_is_valid():
+    """Top-level strategy must be one of three values; rejects malformed responses."""
+    response = json.dumps({
+        "project": "X",
+        "strategy": "unified",
+        "shared_context_files": [],
+        "topics": [],
+        "local_sources": [],
+        "thread_pulls": [],
+        "execution_order": "parallel",
+        "estimated_usage": {},
+    })
+    parsed = json.loads(response)
     valid_strategies = {"planning_only", "intent_planning", "unified"}
-    # Resolver must return one of these
-    assert "unified" in valid_strategies
+    assert parsed["strategy"] in valid_strategies, f"invalid strategy: {parsed['strategy']!r}"
 ```
+
+These tests are still simple parse-and-check, but they actually verify what they claim — they parse a representative response and check that the *parsed* values are in the valid set. The earlier tautologies (`assert depth in valid_depths` after iterating `valid_depths`) have been removed.
 
 **Step 1: Run to confirm pass.**
 
@@ -2761,34 +2993,33 @@ git commit -am "feat(skill): Stages 6-7 with contradiction callouts and confiden
 
 ### Task 8.7 — Stage 10: Telemetry + hop genealogy summary
 
-**Step 1: Update Stage 10 (was Stage 10 in v2, may have shifted numbering)**
+**Important sequencing:** `complete_run()` archives the state file (moves it under `history/{run_id}/`), so any `load_run()` call AFTER `complete_run()` returns `None`. Stage 10's telemetry, hop genealogy print, and case-record write must all use the dict returned BY `complete_run()` — not call `load_run()` after the fact.
 
-Replace the "Print summary" section with the enriched version:
+Task 2.9 modified `complete_run()` to return the final run dict (with `completed_at`) before archiving, exactly so Stage 10 can use it.
+
+**Step 1: Update Stage 10**
+
+Replace the "Stage 10a (Complete the run)" and "Stage 10b (Print summary)" subsections so the orchestrator captures `complete_run`'s return value first, then uses it for telemetry, then writes the case record from the same dict:
 
 ```markdown
-### Stage 10b. Print summary
-
-Collect telemetry from state.py:
+### Stage 10a. Complete the run (capture final state)
 
 ```bash
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from state import load_run
+from state import complete_run
 from pathlib import Path
-run = load_run(Path('STATE_DIR'))
-print(json.dumps({
-    'usage': run['usage'],
-    'topics': [{'topic': t['topic'], 'hops': len(t['hop_genealogy']),
-                'confidence': t['confidence_history'][-1] if t['confidence_history'] else None,
-                'status': t['status'],
-                'hop_genealogy': t['hop_genealogy']} for t in run['topics']],
-    'replan_count': run['replan_count'],
-    'low_confidence': run.get('low_confidence', False),
-    'final_confidence_score': run.get('final_confidence_score'),
-}))
+final = complete_run(Path('STATE_DIR'))
+print(json.dumps(final))
 "
 ```
+
+Parse the printed JSON. This is the FINAL run dict (with `completed_at` set). The state file has been moved to history at this point — do NOT call `load_run` again.
+
+### Stage 10b. Print summary
+
+Using the `final` dict from 10a:
 
 Then format and print:
 
@@ -2843,43 +3074,46 @@ Sum across models for the estimate.
 
 ### Stage 10c. Write case record
 
-After all output, write the case record (Stage B prep):
+Using the same `final` dict from 10a (do NOT re-read state — it's archived already):
 
 ```bash
 python -c "
 import sys, json
 sys.path.insert(0, 'SCRIPTS')
-from state import load_run, write_case_record
+from state import write_case_record
 from pathlib import Path
-state_dir = Path('STATE_DIR')
 cases_dir = Path('CASES_DIR')
-run = load_run(state_dir)
+
+# 'final' was captured from complete_run() in stage 10a; pass it via stdin or a temp file
+import json as _json
+final = _json.loads(open('FINAL_JSON_TEMP_FILE').read())
+
 case = {
-    'case_id': run['run_id'],
+    'case_id': final['run_id'],
     'version': 1,
-    'query': PROJECT_NAME,
+    'query': 'PROJECT_NAME',
     'domain_tags': DERIVED_TAGS,
-    'strategy_used': run.get('strategy', 'unified'),
-    'depths_used': {d: sum(1 for t in run['topics'] if t['depth'] == d)
+    'strategy_used': final.get('strategy', 'unified'),
+    'depths_used': {d: sum(1 for t in final['topics'] if t.get('depth') == d)
                     for d in ['quick','standard','deep','exhaustive']},
-    'hops_executed': sum(len(t['hop_genealogy']) for t in run['topics']),
-    'confidence_per_topic': {t['topic']: t['confidence_history'][-1] if t['confidence_history'] else None
-                             for t in run['topics']},
-    'contradiction_rate': max((t['contradiction_rate'] for t in run['topics']), default=0.0),
+    'hops_executed': sum(len(t.get('hop_genealogy', [])) for t in final['topics']),
+    'confidence_per_topic': {t['topic']: (t['confidence_history'][-1] if t.get('confidence_history') else None)
+                             for t in final['topics']},
+    'contradiction_rate': max((t.get('contradiction_rate', 0.0) for t in final['topics']), default=0.0),
     'patterns_that_worked': PATTERNS_WORKED,
     'patterns_that_failed': PATTERNS_FAILED,
     'outcomes': {
         'sources_processed': SOURCES_COUNT,
         'notes_created': CREATED_COUNT,
         'notes_updated': UPDATED_COUNT,
-        'user_decisions': run.get('user_decisions', []),
+        'user_decisions': final.get('user_decisions', []),
     },
 }
 write_case_record(cases_dir, case)
 "
 ```
 
-DERIVED_TAGS comes from the most common tags across written notes. PATTERNS_WORKED / PATTERNS_FAILED come from per-hop telemetry (patterns that produced novel notes vs. dead ends).
+The orchestrator writes `final` to a temp JSON file between 10a and 10c (typical pattern: write the captured JSON to `STATE_DIR/../tmp/final_run.json` for the duration of 10b/10c, then delete). DERIVED_TAGS comes from the most common tags across written notes. PATTERNS_WORKED / PATTERNS_FAILED come from per-hop telemetry (patterns that produced novel notes vs. dead ends).
 ```
 
 **Step 2: Commit**
@@ -3081,16 +3315,23 @@ git add tests/fixtures/research_integration/
 git commit -m "test: add fixture data for research pipeline integration test"
 ```
 
-### Task 10.3 — Write the integration test
+### Task 10.3 — Write the state-mechanics test
+
+Honest naming. The skill is invoked by Claude Code's slash-command machinery, which is not a Python-executable harness. Without a fake Claude-Code runtime, we can't drive `skills/research/SKILL.md` from a pytest suite. So this test exercises the **Python state machinery** that the SKILL.md depends on — `state.py`, `confidence.py`, the JSON parsing helpers — using the fixture responses as if a real run had produced them.
+
+End-to-end orchestrator testing happens via manual `/research` smoke runs (covered in Phase 11), not pytest. That's documented; the fixtures are still useful (they pin the JSON contract per agent).
 
 **Files:**
-- Create: `tests/test_research_skill_integration.py`
+- Create: `tests/test_research_state_mechanics.py`
 
 ```python
-"""Integration test for the multi-hop research pipeline.
+"""State-mechanics test for the multi-hop research pipeline.
 
-Doesn't call real subagents. Uses a mocked Task dispatcher that returns
-fixture data based on the agent name + arguments.
+This is NOT a full orchestrator integration test — the orchestrator (SKILL.md)
+runs inside Claude Code's slash-command machinery, which has no Python harness.
+Instead, this test drives the Python state helpers (state.py, confidence.py)
+through the same sequence the orchestrator would, using fixture JSON for the
+agent responses to validate the JSON contracts.
 """
 import json
 from pathlib import Path
@@ -3104,74 +3345,74 @@ def load_fixture(name: str) -> dict:
     return json.loads((FIXTURE_DIR / name).read_text())
 
 
-class MockTaskDispatcher:
-    """Returns fixture responses based on the agent being dispatched."""
+def test_fixtures_parse_into_expected_shapes():
+    """Each agent fixture parses and has the keys the orchestrator depends on."""
+    resolver = load_fixture("topic_resolver_response.json")
+    assert resolver["strategy"] in {"planning_only", "intent_planning", "unified"}
+    assert all(t["depth"] in {"quick", "standard", "deep", "exhaustive"}
+               for t in resolver["topics"])
 
-    def __init__(self):
-        self.calls = []
+    search = load_fixture("search_hop1_topic0.json")
+    for url in search["selected_urls"]:
+        assert url["tier"] in {"T1", "T2", "T3", "T4"}
+        assert 0.0 <= url["credibility_score"] <= 1.0
+        assert isinstance(url["is_primary"], bool)
 
-    def dispatch(self, agent: str, model: str, prompt: str) -> str:
-        self.calls.append({"agent": agent, "model": model, "prompt": prompt[:200]})
+    planner = load_fixture("hop_planner_topic0_hop1.json")
+    assert planner["decision"] in {"continue", "stop", "replan"}
 
-        if "topic-resolver" in agent or "topic-resolver" in prompt:
-            return json.dumps(load_fixture("topic_resolver_response.json"))
-        if "search-agent" in agent or "search" in prompt.lower():
-            return json.dumps(load_fixture("search_hop1_topic0.json"))
-        if "hop-planner" in agent:
-            return json.dumps(load_fixture("hop_planner_topic0_hop1.json"))
-        if "classify-agent" in agent:
-            return json.dumps(load_fixture("classify_response.json"))
-        raise ValueError(f"Unhandled mock dispatch: {agent}")
+    classify = load_fixture("classify_response.json")
+    assert "contradictions_detected" in classify
 
 
-def test_pipeline_completes_quick_depth(tmp_path, monkeypatch):
-    """Quick-depth single-topic run completes end-to-end."""
-    # The skill execution model in tests is to invoke the underlying
-    # Python helpers directly rather than parse the SKILL.md. This test
-    # validates that state.py + confidence.py + the agent contract format
-    # work together for a one-hop run.
-
-    from state import create_run, init_topic, record_hop, append_confidence, mark_topic_status, load_run
+def test_quick_depth_run_via_state_helpers(tmp_path):
+    """Drives state.py the way Stage 4 would for a quick-depth single-topic run."""
+    from state import (
+        create_run, init_topic, save_state, record_hop, append_confidence,
+        mark_topic_status, load_run,
+    )
+    from confidence import compute_confidence
 
     state_dir = tmp_path / "state"
     state_dir.mkdir()
 
-    # Stage 0-3: create run, init topics
-    run = create_run(state_dir, run_id="test-run", tier="full")
+    run = create_run(state_dir, run_id="test-quick-run", tier="full")
     topic = init_topic("Test topic", mode="web_research", depth="quick")
     run["topics"] = [topic]
-    from state import save_state
     save_state(state_dir, run)
 
-    # Stage 4: simulate one hop completion
+    # Compute confidence from a fixture-like source set (mid-quality)
+    sources = [
+        {"tier": "T1", "is_primary": True},
+        {"tier": "T2", "is_primary": False},
+        {"tier": "T2", "is_primary": False},
+    ]
+    score = compute_confidence(sources, depth="quick")
+    assert score > 0.0
+
+    # Record the hop with that score, mark complete
     hop_data = {
-        "hop": 1,
-        "pattern": None,
-        "queries": ["test query"],
-        "sources_found": 5,
-        "sources_kept": 5,
+        "hop": 1, "pattern": None, "queries": ["q"],
+        "sources_found": 3, "sources_kept": 3,
         "ended_at": "2026-05-26T15:00:00Z",
     }
     record_hop(state_dir, topic_name="Test topic", hop_data=hop_data)
-
-    # Hop-planner decides to stop
-    append_confidence(state_dir, topic_name="Test topic", score=0.72)
+    append_confidence(state_dir, topic_name="Test topic", score=score)
     mark_topic_status(state_dir, topic_name="Test topic", status="complete")
 
-    # Verify final state
     final = load_run(state_dir)
     assert final["topics"][0]["status"] == "complete"
     assert final["topics"][0]["current_hop"] == 1
-    assert final["topics"][0]["confidence_history"] == [0.72]
+    assert final["topics"][0]["confidence_history"] == [score]
     assert len(final["topics"][0]["hop_genealogy"]) == 1
 
 
-def test_pipeline_replan_increments_count(tmp_path):
+def test_replan_increments_count(tmp_path):
     from state import create_run, init_topic, save_state, increment_replan, load_run
 
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    run = create_run(state_dir, run_id="test-run", tier="full")
+    run = create_run(state_dir, run_id="test-replan-run", tier="full")
     run["topics"] = [init_topic("T", mode="web_research", depth="standard")]
     save_state(state_dir, run)
 
@@ -3182,12 +3423,12 @@ def test_pipeline_replan_increments_count(tmp_path):
     assert final["replan_count"] == 2
 
 
-def test_pipeline_low_confidence_marks_run(tmp_path):
+def test_low_confidence_marks_run(tmp_path):
     from state import create_run, save_state, record_user_decision, load_run
 
     state_dir = tmp_path / "state"
     state_dir.mkdir()
-    run = create_run(state_dir, run_id="test-run", tier="full")
+    run = create_run(state_dir, run_id="test-lowconf-run", tier="full")
     save_state(state_dir, run)
 
     record_user_decision(state_dir, decision="continue_anyway", confidence=0.52)
@@ -3202,10 +3443,10 @@ def test_pipeline_low_confidence_marks_run(tmp_path):
     assert final["user_decisions"][0]["decision"] == "continue_anyway"
 ```
 
-**Step 1: Run the integration test**
+**Step 1: Run the test**
 
 ```bash
-pytest tests/test_research_skill_integration.py -v
+pytest tests/test_research_state_mechanics.py -v
 ```
 
 Expected: PASS.
@@ -3221,8 +3462,8 @@ Expected: all tests pass.
 **Step 3: Commit**
 
 ```bash
-git add tests/test_research_skill_integration.py
-git commit -m "test: integration test for multi-hop pipeline state mechanics"
+git add tests/test_research_state_mechanics.py
+git commit -m "test: state-mechanics test for multi-hop pipeline (with fixture-shape pinning)"
 ```
 
 ---
