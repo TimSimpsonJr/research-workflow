@@ -789,16 +789,22 @@ Complete the run and stop.
 
 ### 6d. Save classification
 
-Write to `STATE_DIR/classification.json` and update state:
+Persist the parsed classify-agent response to `STATE_DIR/classification.json` so Stage 7's resume contract can find it, then advance the stage:
+
 ```bash
 python -c "
-import sys
+import sys, json
 sys.path.insert(0, 'SCRIPTS')
 from state import update_stage, save_stage_output
 from pathlib import Path
-update_stage(Path('STATE_DIR'), 'write')
+state_dir = Path('STATE_DIR')
+# CLASSIFICATION_JSON is the parsed JSON object from the classify-agent dispatch in 6b/6c.
+save_stage_output(state_dir, 'classification', CLASSIFICATION_JSON)
+update_stage(state_dir, 'write')
 "
 ```
+
+Substitute `CLASSIFICATION_JSON` with the parsed dict from Stage 6c, serialized as a Python dict literal.
 
 ---
 
