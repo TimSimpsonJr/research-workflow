@@ -393,6 +393,7 @@ def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
         },
         "replan_count": 0,
         "user_decisions": [],
+        "applied_patterns": [],
     }
     _atomic_write(run_file, run)
     return run

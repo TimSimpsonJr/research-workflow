@@ -33,6 +33,17 @@ def test_create_run_initial_stage_is_triage(tmp_path):
     assert run["stage"] == "triage"
 
 
+def test_create_run_has_empty_applied_patterns(tmp_path):
+    """v3.1.0 runs initialize with an empty applied_patterns list."""
+    from state import create_run, load_run
+    run = create_run(tmp_path, run_id="test-v31-applied", tier="base")
+    assert "applied_patterns" in run
+    assert run["applied_patterns"] == []
+    # Round-trip via load_run too
+    persisted = load_run(tmp_path)
+    assert persisted["applied_patterns"] == []
+
+
 def test_create_run_fails_if_run_exists(tmp_path):
     from state import create_run
     create_run(tmp_path, "run1", "base")
