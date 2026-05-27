@@ -452,3 +452,73 @@ def test_analyzer_does_not_re_create_graduated_pattern(tmp_path):
     duplicate = [e for e in acc.entries if e.pattern_id == graduated_pid]
     assert duplicate == [], \
         f"graduated pattern_id should not be re-created in accumulator, found: {duplicate}"
+
+
+def test_partial_write_recovery_reconciles_stale_promotion_pending(tmp_path):
+    """If a prior Stage 10e Promote landed in learned_patterns.md but
+    the subsequent save_accumulator() crashed, the next run must not
+    re-prompt the user for the already-graduated pattern. Instead,
+    silently reconcile by removing the stale accumulator entry.
+    Regression for codex round-3 finding duplicate-graduation."""
+    from case_analyzer import analyze
+    from accumulator import (
+        Accumulator, AccumulatorEntry, save_accumulator, load_accumulator,
+    )
+    from learned_patterns import (
+        LearnedPatternsFile, LearnedPattern, save_learned_patterns,
+    )
+    from datetime import datetime, timezone
+    import json
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Simulate the partial-write state:
+    # - learned_patterns.md has the pattern (Promote succeeded)
+    # - accumulator.json still has the entry at promotion_pending (save crashed)
+    pid = "stuck-graduated-pid"
+    save_learned_patterns(lp_path, LearnedPatternsFile(patterns=[
+        LearnedPattern(
+            id=pid, name="Already graduated",
+            body="body", domain_tags=["civic"], target_stage="search",
+            category="source-tier-bias",
+            wins=0, losses=0, promoted_at="2026-05-01", demotion_count=0,
+        ),
+    ]))
+    save_accumulator(acc_path, Accumulator(entries=[
+        AccumulatorEntry(
+            pattern_id=pid, name="Already graduated",
+            category="source-tier-bias", target_stage="search",
+            domain_tags=["civic"],
+            sessions_seen=3, sessions_since_last_seen=0,
+            status="promotion_pending", raised_bar=False, promotion_pending=True,
+            demotion_count=0,
+            evidence=[{"case_id": "c0", "signal": "..."}],
+            proposed_promotion_body="body", created_at=now, last_updated_at=now,
+        ),
+    ]))
+
+    case = {
+        "case_id": "c1", "domain_tags": ["other"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.8}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {"source_tiers": {}, "hop_chain": [], "queries": []},
+    }
+    (cases_dir / "c1.json").write_text(json.dumps(case))
+    result = analyze(
+        case_path=cases_dir / "c1.json",
+        accumulator_path=acc_path, learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+    )
+
+    # The stale promotion_pending entry must NOT re-surface
+    assert result.promotion_candidates == [], \
+        f"stale promotion_pending for already-graduated pattern should not be re-prompted, got: {[c.pattern_id for c in result.promotion_candidates]}"
+
+    # And the accumulator should have been cleaned up
+    acc, _ = load_accumulator(acc_path)
+    stale = [e for e in acc.entries if e.pattern_id == pid]
+    assert stale == [], "stale accumulator entry should have been removed during recovery"

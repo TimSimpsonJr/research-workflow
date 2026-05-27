@@ -21,6 +21,7 @@ from accumulator import (
     tick_staleness,
     mark_promotion_pending,
     demote,
+    remove_entry,  # NEW for partial-write recovery
 )
 from learned_patterns import (
     LearnedPatternsFile,
@@ -87,6 +88,10 @@ def analyze(
     result.warnings.extend(acc_warnings)
     learned, lp_warnings = load_learned_patterns(learned_patterns_path)
     result.warnings.extend(lp_warnings)
+
+    # Hoisted to outer scope: reused by step 4 (heuristic re-detection skip) and
+    # step 5 (partial-write recovery — stale promotion_pending reconciliation).
+    learned_pattern_ids = {p.id for p in learned.patterns}
 
     # Compute corruption flags early — they gate cross-file mutations below
     # (so we don't write to one store while skipping the other and lose state).
@@ -178,7 +183,7 @@ def analyze(
     # promotion, leading to "duplicate" re-graduations. Patterns present in
     # learned.patterns are by definition graduated (demotion moves them back
     # to the accumulator and removes them from learned).
-    learned_pattern_ids = {p.id for p in learned.patterns}
+    # (learned_pattern_ids hoisted to outer scope above — also used by step 5)
     seen_pattern_ids = set()
     for c in candidates:
         # Cheap exact-match check before the semantic-merge dispatch.
@@ -230,6 +235,13 @@ def analyze(
         if entry.status not in ("hold", "promotion_pending"):
             continue
         if entry.status == "promotion_pending":
+            if entry.pattern_id in learned_pattern_ids:
+                # Cross-file transaction recovery: prior Promote landed the
+                # learned pattern but the accumulator save didn't complete,
+                # leaving a stale promotion_pending entry. Don't re-prompt
+                # the user — silently reconcile by removing the entry.
+                remove_entry(accumulator, entry.pattern_id)
+                continue
             # Re-surface entries left pending by a prior aborted/dismissed
             # Stage 10e prompt. The threshold was already met when status
             # was first flipped to "promotion_pending"; no need to re-check.
@@ -251,8 +263,11 @@ def analyze(
     # 6. Persist selectively — refuse to clobber files that loaded with warnings.
     #    Write order when both are written: learned_patterns FIRST, then accumulator
     #    (if the accumulator write fails after learned_patterns succeeded, the next
-    #    run's analyzer dedupes via the step-4 `learned_pattern_ids` skip — no
-    #    double-graduation; the reverse order would risk losing graduations).
+    #    run's analyzer reconciles via TWO protections, both keyed on
+    #    `learned_pattern_ids`: step 4 skips heuristic re-detection of graduated
+    #    pattern_ids, and step 5 removes any stale promotion_pending entry whose
+    #    pattern_id has already graduated. Together these prevent double-graduation
+    #    and stale re-prompts; the reverse write order would risk losing graduations).
     if not lp_corrupt:
         save_learned_patterns(learned_patterns_path, learned)
     if not acc_corrupt:
