@@ -1,0 +1,242 @@
+[
+  {
+    "case_id": "2026-03-08-transformer-attention-mechanics",
+    "version": 1,
+    "query": "How does multi-head attention actually work under the hood?",
+    "domain_tags": ["tech"],
+    "strategy_used": "intent_planning",
+    "depths_used": {"quick": 0, "standard": 0, "deep": 1, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"transformer-attention-mechanics": 0.81},
+    "contradiction_rate": 0.04,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 4, "T2": 4, "T3": 2, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "multi-head attention derivation",
+        "attention mechanism gradient flow"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": ["attention is all you need meme"]
+    },
+    "outcomes": {
+      "sources_processed": 10,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-03-15-raft-consensus-protocol",
+    "version": 1,
+    "query": "Why is Raft easier to understand than Paxos?",
+    "domain_tags": ["tech"],
+    "strategy_used": "intent_planning",
+    "depths_used": {"quick": 0, "standard": 0, "deep": 1, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"raft-consensus-protocol": 0.84},
+    "contradiction_rate": 0.06,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 3, "T2": 5, "T3": 2, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "raft protocol leader election explanation",
+        "raft vs paxos formal comparison"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 1, "T3": 0, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 10,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-03-22-rust-borrow-checker-internals",
+    "version": 1,
+    "query": "How does the Rust borrow checker reason about lifetimes?",
+    "domain_tags": ["tech"],
+    "strategy_used": "intent_planning",
+    "depths_used": {"quick": 0, "standard": 0, "deep": 1, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"rust-borrow-checker-internals": 0.79},
+    "contradiction_rate": 0.05,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 4, "T2": 4, "T3": 1, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "rust borrow checker NLL non-lexical lifetimes",
+        "lifetime inference algorithm rustc"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 2},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 9,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-03-30-cap-theorem-tradeoffs",
+    "version": 1,
+    "query": "What does CAP theorem actually mean for modern databases?",
+    "domain_tags": ["tech"],
+    "strategy_used": "intent_planning",
+    "depths_used": {"quick": 0, "standard": 0, "deep": 1, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"cap-theorem-tradeoffs": 0.76},
+    "contradiction_rate": 0.11,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 3, "T2": 4, "T3": 2, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "cap theorem misconception clarification",
+        "pacelc theorem extension partition"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 2},
+      "hop_chain": [],
+      "queries": ["mongodb cap marketing"]
+    },
+    "outcomes": {
+      "sources_processed": 9,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-05-tcp-congestion-control",
+    "version": 1,
+    "query": "How do modern TCP congestion control algorithms differ from BBR?",
+    "domain_tags": ["tech"],
+    "strategy_used": "intent_planning",
+    "depths_used": {"quick": 0, "standard": 0, "deep": 1, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"tcp-congestion-control": 0.77},
+    "contradiction_rate": 0.07,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 4, "T2": 3, "T3": 2, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "bbr congestion control model derivation",
+        "cubic vs bbr fairness analysis"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 1, "T3": 0, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 9,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-12-merkle-tree-applications",
+    "version": 1,
+    "query": "How do Merkle trees enable efficient verification?",
+    "domain_tags": ["tech"],
+    "strategy_used": "intent_planning",
+    "depths_used": {"quick": 0, "standard": 0, "deep": 1, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"merkle-tree-applications": 0.83},
+    "contradiction_rate": 0.03,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 3, "T2": 5, "T3": 1, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "merkle tree proof construction inclusion",
+        "binary hash tree complexity analysis"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 9,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-20-bloom-filter-design",
+    "version": 1,
+    "query": "How are Bloom filter parameters tuned in practice?",
+    "domain_tags": ["tech"],
+    "strategy_used": "intent_planning",
+    "depths_used": {"quick": 0, "standard": 0, "deep": 1, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"bloom-filter-design": 0.8},
+    "contradiction_rate": 0.04,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 4, "T2": 4, "T3": 1, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "bloom filter false positive rate derivation",
+        "counting bloom filter variant analysis"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 9,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-28-lsm-tree-compaction",
+    "version": 1,
+    "query": "How do LSM-tree compaction strategies impact write amplification?",
+    "domain_tags": ["tech"],
+    "strategy_used": "intent_planning",
+    "depths_used": {"quick": 0, "standard": 0, "deep": 1, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"lsm-tree-compaction": 0.78},
+    "contradiction_rate": 0.05,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 3, "T2": 5, "T3": 1, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "entity_expansion"],
+      "queries": [
+        "lsm tree leveled vs tiered compaction tradeoffs",
+        "rocksdb write amplification benchmark"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 1, "T3": 0, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 9,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  }
+]

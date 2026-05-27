@@ -1,0 +1,218 @@
+[
+  {
+    "case_id": "2026-03-10-mixed-domain-success-one",
+    "version": 1,
+    "query": "topic where T1 sources worked well",
+    "domain_tags": ["mixed"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mixed-domain-success-one": 0.85},
+    "contradiction_rate": 0.04,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": ["official source query A"]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-03-17-mixed-domain-success-two",
+    "version": 1,
+    "query": "another topic where T1 sources worked well",
+    "domain_tags": ["mixed"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mixed-domain-success-two": 0.83},
+    "contradiction_rate": 0.06,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": ["official source query B"]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-03-24-mixed-domain-success-three",
+    "version": 1,
+    "query": "third topic where T1 sources worked well",
+    "domain_tags": ["mixed"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mixed-domain-success-three": 0.81},
+    "contradiction_rate": 0.05,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": ["official source query C"]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-03-31-mixed-domain-success-four",
+    "version": 1,
+    "query": "fourth topic where T1 sources worked well",
+    "domain_tags": ["mixed"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mixed-domain-success-four": 0.82},
+    "contradiction_rate": 0.05,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": ["official source query D"]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-07-mixed-domain-failure-one",
+    "version": 1,
+    "query": "topic where T1 sources failed to support claims",
+    "domain_tags": ["mixed"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 1, "standard": 0, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mixed-domain-failure-one": 0.45},
+    "contradiction_rate": 0.32,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 0, "T2": 1, "T3": 1, "T4": 4},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": ["independent reporting query"]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 0, "T4": 0},
+      "hop_chain": [],
+      "queries": ["official press release query"]
+    },
+    "outcomes": {
+      "sources_processed": 16,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-14-mixed-domain-failure-two",
+    "version": 1,
+    "query": "another topic where T1 sources failed to support claims",
+    "domain_tags": ["mixed"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 1, "standard": 0, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mixed-domain-failure-two": 0.48},
+    "contradiction_rate": 0.29,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 0, "T2": 1, "T3": 1, "T4": 4},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": ["grassroots reporting query"]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 0, "T4": 0},
+      "hop_chain": [],
+      "queries": ["agency communications query"]
+    },
+    "outcomes": {
+      "sources_processed": 16,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-21-mixed-domain-failure-three",
+    "version": 1,
+    "query": "third topic where T1 sources failed to support claims",
+    "domain_tags": ["mixed"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 1, "standard": 0, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mixed-domain-failure-three": 0.42},
+    "contradiction_rate": 0.35,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 0, "T2": 1, "T3": 1, "T4": 4},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": ["citizen journalism query"]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 0, "T4": 0},
+      "hop_chain": [],
+      "queries": ["spokesperson statement query"]
+    },
+    "outcomes": {
+      "sources_processed": 16,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-28-mixed-domain-failure-four",
+    "version": 1,
+    "query": "fourth topic where T1 sources failed to support claims",
+    "domain_tags": ["mixed"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 1, "standard": 0, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mixed-domain-failure-four": 0.46},
+    "contradiction_rate": 0.31,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 0, "T2": 1, "T3": 1, "T4": 4},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": ["alternative outlet query"]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 0, "T4": 0},
+      "hop_chain": [],
+      "queries": ["press conference transcript query"]
+    },
+    "outcomes": {
+      "sources_processed": 16,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  }
+]

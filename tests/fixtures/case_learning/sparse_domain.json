@@ -1,0 +1,60 @@
+[
+  {
+    "case_id": "2026-04-15-niche-topic-one",
+    "version": 1,
+    "query": "obscure niche topic exploration 2025",
+    "domain_tags": ["niche"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"niche-topic-one": 0.72},
+    "contradiction_rate": 0.05,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 10, "T2": 0, "T3": 0, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "niche topic one historical analysis 2025"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 0, "T4": 0},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 10,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-05-01-niche-topic-two",
+    "version": 1,
+    "query": "another niche topic exploration 2024",
+    "domain_tags": ["niche"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"niche-topic-two": 0.7},
+    "contradiction_rate": 0.05,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 10, "T2": 0, "T3": 0, "T4": 0},
+      "hop_chain": ["conceptual_deepening", "conceptual_deepening"],
+      "queries": [
+        "niche topic two historical analysis 2024"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 0, "T4": 0},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 10,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  }
+]
