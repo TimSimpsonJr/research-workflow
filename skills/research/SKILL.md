@@ -1331,6 +1331,7 @@ case = {
     'contradiction_rate': max((t.get('contradiction_rate', 0.0) for t in final['topics']), default=0.0),
     'patterns_that_worked': PATTERNS_WORKED,
     'patterns_that_failed': PATTERNS_FAILED,
+    'applied_patterns': final.get('applied_patterns', []),
     'outcomes': {
         'sources_processed': SOURCES_COUNT,
         'notes_created': CREATED_COUNT,
@@ -1408,11 +1409,11 @@ new cases going forward. Existing case history at
 
 (There is no in-pipeline rebuild flow in v3.1.0. Corrupt-state recovery is rare; the simpler "user deletes file -> fresh start" path was preferred over carrying the complexity of a rebuild-from-history mechanism. Revisit in v3.1.x if real usage shows this is too coarse.)
 
-**Stage 10e gating.** If any `learned_patterns_*` warning is present, **skip Stage 10e entirely for this run** -- even if `promotion_candidates` is non-empty. Stage 10e's promote path would otherwise be unable to write the graduated pattern (analyzer refused the write). Log: "Skipping graduation prompts -- learned_patterns.md needs manual repair first."
+**Stage 10e gating.** If any `learned_patterns_*` OR `accumulator_*` warning is present, **skip Stage 10e entirely for this run** -- even if `promotion_candidates` is non-empty. Stage 10e's promote/reject/hold branches would otherwise be unable to safely write the affected store (analyzer refused the write, so the load returns empty + warning, and a save would clobber the recoverable file). Log: "Skipping graduation prompts -- `learned_patterns.md` or `accumulator.json` needs manual repair first."
 
 **Normal flow after warnings handling.**
 
-If `promotion_candidates` is non-empty AND no `learned_patterns_*` warnings, proceed to Stage 10e. Otherwise skip 10e.
+If `promotion_candidates` is non-empty AND no `learned_patterns_*` or `accumulator_*` warnings, proceed to Stage 10e. Otherwise skip 10e.
 
 If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised), log to state telemetry and continue silently. The run still completes; the analyzer just didn't update state this round.
 
@@ -1452,7 +1453,7 @@ Use the user's response:
 
 All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10d uses -- without it, concurrent `/research` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
 
-**Precondition for the Promote branch:** Stage 10d already verified that `learned_patterns.md` is parseable (no `learned_patterns_corrupted` / `learned_patterns_schema_mismatch` warnings) BEFORE letting control reach Stage 10e. If those warnings were present, Stage 10d skipped 10e entirely. So inside the Promote branch we can assume `load_learned_patterns()` returns a usable file -- but the snippet below still defends against late corruption by checking warnings before saving.
+**Precondition for all three branches:** Stage 10d already verified that BOTH `learned_patterns.md` AND `accumulator.json` are parseable (no `learned_patterns_*` and no `accumulator_*` warnings) BEFORE letting control reach Stage 10e. If any such warning was present, Stage 10d skipped 10e entirely. So inside each branch we can assume the loaders return a usable file -- but every branch still defends against late corruption by checking warnings before saving (`BRANCH_ABORTED` on mismatch). The Reject and Hold branches would otherwise silently overwrite a recoverable corrupt accumulator with empty content.
 
 **Promote:**
 
@@ -1473,9 +1474,16 @@ with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
         # Refuse to clobber a corrupt/incompatible file even if Stage 10d
         # missed the gate (defense in depth). Log and bail.
         import sys as _sys
-        print(f'PROMOTE_ABORTED: refusing to save over corrupt learned_patterns.md: {lp_warnings}', file=_sys.stderr)
+        print(f'BRANCH_ABORTED: refusing to save over corrupt learned_patterns.md: {lp_warnings}', file=_sys.stderr)
         _sys.exit(0)
-    acc, _ = load_accumulator(Path('ACCUMULATOR_PATH'))
+    acc, acc_warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    if acc_warnings:
+        # Same defense for the accumulator side -- without this check the
+        # next(...) lookup below would raise StopIteration on the empty
+        # fallback, masking the real failure with an opaque crash.
+        import sys as _sys
+        print(f'BRANCH_ABORTED: refusing to save over corrupt accumulator.json: {acc_warnings}', file=_sys.stderr)
+        _sys.exit(0)
     entry = next(e for e in acc.entries if e.pattern_id == 'PATTERN_ID')
     # Skip if already in learned_patterns (cross-file transaction recovery --
     # prior promotion wrote learned_patterns but failed to update accumulator)
@@ -1508,7 +1516,15 @@ from pathlib import Path
 from state import acquire_state_lock
 
 with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
-    acc, _warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    acc, acc_warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    if acc_warnings:
+        # Defense in depth: Stage 10d should have skipped 10e if the
+        # accumulator was corrupt, but without this guard a `mark_rejected`
+        # + `save_accumulator` on the empty fallback would clobber the
+        # recoverable corrupt file with empty content.
+        import sys as _sys
+        print(f'BRANCH_ABORTED: refusing to save over corrupt accumulator.json: {acc_warnings}', file=_sys.stderr)
+        _sys.exit(0)
     mark_rejected(acc, 'PATTERN_ID')
     save_accumulator(Path('ACCUMULATOR_PATH'), acc)
 "
@@ -1524,7 +1540,14 @@ from pathlib import Path
 from state import acquire_state_lock
 
 with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
-    acc, _warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    acc, acc_warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    if acc_warnings:
+        # Same defense as Reject -- a `clear_promotion_pending` +
+        # `save_accumulator` on the empty fallback would clobber the
+        # recoverable corrupt file with empty content.
+        import sys as _sys
+        print(f'BRANCH_ABORTED: refusing to save over corrupt accumulator.json: {acc_warnings}', file=_sys.stderr)
+        _sys.exit(0)
     clear_promotion_pending(acc, 'PATTERN_ID')
     save_accumulator(Path('ACCUMULATOR_PATH'), acc)
 "
