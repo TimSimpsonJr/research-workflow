@@ -140,6 +140,32 @@ def bump_max_hops(state_dir: Path, topic_name: str, increment: int = 1) -> None:
     save_state(state_dir, run)
 
 
+def increment_replan(state_dir: Path) -> None:
+    """Increment the run's replan counter. Silently no-ops if no active run."""
+    run = load_run(state_dir)
+    if run is None:
+        return
+    run["replan_count"] += 1
+    save_state(state_dir, run)
+
+
+def record_user_decision(state_dir: Path, decision: str, **details) -> None:
+    """Append a user-decision entry to the run's user_decisions log.
+
+    Extra details (e.g., confidence, reason) are merged into the entry alongside
+    the decision label and timestamp. Silently no-ops if no active run.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        return
+    run["user_decisions"].append({
+        "decision": decision,
+        "at": datetime.now(timezone.utc).isoformat(),
+        **details,
+    })
+    save_state(state_dir, run)
+
+
 def add_usage(state_dir: Path, model: str, in_tokens: int, out_tokens: int, stage: str) -> None:
     """Increment per-model usage counters for the active run.
 
@@ -279,6 +305,8 @@ def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
             "opus":   {"calls": 0, "in_tokens": 0, "out_tokens": 0},
             "ollama": {"calls": 0},
         },
+        "replan_count": 0,
+        "user_decisions": [],
     }
     _atomic_write(run_file, run)
     return run

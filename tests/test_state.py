@@ -345,3 +345,31 @@ def test_add_usage_accumulates(tmp_path):
     usage = load_run(tmp_path)["usage"]
     assert usage["haiku"] == {"calls": 2, "in_tokens": 1500, "out_tokens": 300}
     assert usage["ollama"]["calls"] == 1
+
+
+def test_replan_count_starts_at_zero(tmp_path):
+    from state import create_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    assert run["replan_count"] == 0
+    assert run["user_decisions"] == []
+
+
+def test_increment_replan(tmp_path):
+    from state import create_run, save_state, increment_replan, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    save_state(tmp_path, run)
+    increment_replan(tmp_path)
+    increment_replan(tmp_path)
+    assert load_run(tmp_path)["replan_count"] == 2
+
+
+def test_record_user_decision(tmp_path):
+    from state import create_run, save_state, record_user_decision, load_run
+    run = create_run(tmp_path, run_id="r1", tier="full")
+    save_state(tmp_path, run)
+    record_user_decision(tmp_path, decision="continue_anyway", confidence=0.52)
+    decisions = load_run(tmp_path)["user_decisions"]
+    assert len(decisions) == 1
+    assert decisions[0]["decision"] == "continue_anyway"
+    assert decisions[0]["confidence"] == 0.52
+    assert "at" in decisions[0]
