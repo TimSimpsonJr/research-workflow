@@ -373,3 +373,26 @@ def test_record_user_decision(tmp_path):
     assert decisions[0]["decision"] == "continue_anyway"
     assert decisions[0]["confidence"] == 0.52
     assert "at" in decisions[0]
+
+
+def test_abandon_run_sweeps_hop_intermediate_files(tmp_path):
+    from state import create_run, abandon_run
+    create_run(tmp_path, run_id="2026-05-26-hop-test", tier="full")
+
+    # Simulate per-hop intermediate files
+    (tmp_path / "fetch_results_hop1.json").write_text("{}")
+    (tmp_path / "fetch_results_hop2.json").write_text("{}")
+    (tmp_path / "summaries_hop1.json").write_text("{}")
+    (tmp_path / "search_context_hop1.json").write_text("{}")
+
+    abandon_run(tmp_path)
+
+    # All per-hop files land alongside current_run.json under history/{run_id}/
+    history_dir = tmp_path / "history" / "2026-05-26-hop-test"
+    assert history_dir.exists()
+    assert (history_dir / "fetch_results_hop1.json").exists()
+    assert (history_dir / "fetch_results_hop2.json").exists()
+    assert (history_dir / "summaries_hop1.json").exists()
+    assert (history_dir / "search_context_hop1.json").exists()
+    # Active run file should be gone
+    assert not (tmp_path / "current_run.json").exists()
