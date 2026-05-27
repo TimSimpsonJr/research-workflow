@@ -33,13 +33,13 @@
 | 3 | `learned_patterns.md` parser/writer | 4 |
 | 4 | Heuristic candidate detection | 5 |
 | 5 | Score updates + demotion sweep | 4 |
-| 6 | Case analyzer wiring (top-level `analyze()`) | 3 |
+| 6 | Case analyzer wiring + Haiku semantic-merge / contradiction wiring | 5 |
 | 7 | Haiku semantic-compare subagent + contract test | 2 |
-| 8 | Orchestrator extensions in SKILL.md | 5 |
+| 8 | Orchestrator extensions in SKILL.md (Stage 2d / 4a / 4e / 6 / 10d / 10e) | 5 |
 | 9 | Multi-run trajectory integration test | 2 |
 | 10 | Backward-compat + final verification | 3 |
 
-39 tasks total. Each phase ends with a per-phase code review (subagent-driven). After all phases complete, codex-impl-review (capped 4-5 rounds) gates the PR.
+41 tasks total. Each phase ends with a per-phase code review (subagent-driven). After all phases complete, codex-impl-review (capped 4-5 rounds) gates the PR.
 
 ---
 
@@ -2501,7 +2501,7 @@ def analyze(
     accumulator_path: Path,
     learned_patterns_path: Path,
     cases_dir: Path,
-    cases_window: int = 20,
+    cases_window: int | None = 20,
     confidence_target: float = 0.75,
     promotion_threshold: int = 3,
     promotion_threshold_raised: int = 5,
@@ -2597,13 +2597,19 @@ def analyze(
         + detect_query_template_recurrence(cases)
     )
 
-    # 4. Record observations into accumulator
+    # 4. Record observations into accumulator (with optional Haiku semantic merge)
     seen_pattern_ids = set()
     for c in candidates:
+        # Semantic merge: if accumulator has a similar entry (same category + same
+        # domain tags) under a DIFFERENT pattern_id, dispatch Haiku to check
+        # whether they describe the same underlying pattern. If so, reuse the
+        # existing pattern_id so sessions_seen accumulates on the right entry
+        # instead of fragmenting across near-duplicates.
+        effective_pid = _match_or_create_pattern_id(c, accumulator, haiku_dispatch, result)
         for ev in c["evidence_rows"]:
             record_observation(
                 accumulator,
-                pattern_id=c["pattern_id"],
+                pattern_id=effective_pid,
                 name=c["name"],
                 category=c["category"],
                 target_stage=c["target_stage"],
@@ -2612,16 +2618,31 @@ def analyze(
                 proposed_promotion_body=c["proposed_promotion_body"],
             )
             break  # only one record_observation per candidate per run
-        seen_pattern_ids.add(c["pattern_id"])
+        seen_pattern_ids.add(effective_pid)
 
     tick_staleness(accumulator, seen_pattern_ids)
 
-    # 5. Promotion eligibility
+    # 5. Promotion eligibility (+ contradiction detection)
     for entry in accumulator.entries:
         if entry.status != "hold":
             continue
         threshold = promotion_threshold_raised if entry.raised_bar else promotion_threshold
         if entry.sessions_seen >= threshold:
+            # Contradiction check: any already-graduated patterns in the same
+            # domain × target_stage bucket? If so, flag — the user resolves
+            # at Stage 10e's graduation prompt by deciding promote/reject/hold.
+            conflicts = [
+                p for p in learned.patterns
+                if p.target_stage == entry.target_stage
+                and (set(p.domain_tags) & set(entry.domain_tags))
+            ]
+            if conflicts:
+                result.contradictions.append({
+                    "candidate_pattern_id": entry.pattern_id,
+                    "candidate_name": entry.name,
+                    "conflicting_graduated_ids": [p.id for p in conflicts],
+                    "conflicting_names": [p.name for p in conflicts],
+                })
             mark_promotion_pending(accumulator, entry.pattern_id)
             result.promotion_candidates.append(entry)
 
@@ -2635,19 +2656,63 @@ def analyze(
     return result
 
 
-def _load_recent_cases(cases_dir: Path, window: int) -> list[dict]:
-    """Load up to `window` most recent case JSON files."""
+def _load_recent_cases(cases_dir: Path, window: int | None) -> list[dict]:
+    """Load up to `window` most recent case JSON files. Pass window=None to
+    scan the full case history (used by Stage 10d's rebuild path)."""
     if not cases_dir.exists():
         return []
     case_files = sorted(cases_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if window is not None:
+        case_files = case_files[:window]
     out = []
-    for cf in case_files[:window]:
+    for cf in case_files:
         try:
             out.append(json.loads(cf.read_text(encoding="utf-8")))
         except (json.JSONDecodeError, OSError) as e:
             # Tolerant — skip malformed cases
             print(f"[analyzer] skipping malformed case {cf.name}: {e}")
     return out
+
+
+def _match_or_create_pattern_id(
+    candidate: dict,
+    accumulator: Accumulator,
+    haiku_dispatch: Callable | None,
+    result: "AnalyzerResult",
+) -> str:
+    """If an accumulator entry exists in the same (domain_tags, category)
+    bucket under a different pattern_id and is not rejected, dispatch the
+    Haiku semantic-compare subagent. On is_same=True, reuse the existing
+    pattern_id so sessions_seen accumulates on the right entry. Otherwise
+    return the candidate's own pattern_id.
+
+    haiku_dispatch=None disables semantic merge entirely (conservative —
+    fragments near-duplicates rather than risk wrong merge).
+    """
+    if haiku_dispatch is None:
+        return candidate["pattern_id"]
+    cand_tag_set = set(candidate["domain_tags"])
+    for existing in accumulator.entries:
+        if existing.pattern_id == candidate["pattern_id"]:
+            continue  # same id is exact-match path, not semantic
+        if existing.status == "rejected":
+            continue  # never reuse rejected ids
+        if existing.category != candidate["category"]:
+            continue
+        if set(existing.domain_tags) != cand_tag_set:
+            continue
+        try:
+            verdict = haiku_dispatch(
+                candidate_body=candidate["proposed_promotion_body"],
+                existing_body=existing.proposed_promotion_body,
+            )
+        except Exception as e:
+            # Conservative — on dispatch error, treat as distinct
+            result.warnings.append(f"haiku_dispatch_error: {e}; treating candidate as distinct")
+            continue
+        if verdict.get("is_same"):
+            return existing.pattern_id  # merge — use existing id
+    return candidate["pattern_id"]
 ```
 
 **Step 4: Verify pass**
@@ -2725,6 +2790,175 @@ Expected: PASS.
 ```bash
 git add tests/test_case_analyzer.py tests/fixtures/case_learning/civic_alpr_cases.json
 git commit -m "test(analyzer): integration over civic_alpr fixture produces candidates"
+```
+
+---
+
+### Task 6.2.1: Semantic-merge integration test
+
+**Files:**
+- Modify: `tests/test_case_analyzer.py`
+
+Verifies the Haiku semantic-compare wires through analyze() correctly. Haiku is mocked at the dispatch boundary (no real subagent calls).
+
+**Step 1: Write failing test**
+
+```python
+def test_semantic_merge_uses_existing_pattern_id_on_haiku_match(tmp_path):
+    """When a heuristic candidate has the same (domain, category) as an
+    existing accumulator entry but a different stable_key, and the Haiku
+    semantic-compare returns is_same=True, the analyzer reuses the existing
+    pattern_id so sessions_seen accumulates on the right entry."""
+    from case_analyzer import analyze
+    from accumulator import Accumulator, AccumulatorEntry, save_accumulator
+    from datetime import datetime, timezone
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+
+    # Seed accumulator with a pre-existing entry in the civic-alpr / source-tier-bias
+    # bucket under pattern_id "existing-pid"
+    now = datetime.now(timezone.utc).isoformat()
+    save_accumulator(acc_path, Accumulator(entries=[
+        AccumulatorEntry(
+            pattern_id="existing-pid", name="Existing T1 pattern", category="source-tier-bias",
+            target_stage="search", domain_tags=["civic", "alpr"],
+            sessions_seen=1, sessions_since_last_seen=0, status="hold",
+            raised_bar=False, promotion_pending=False, demotion_count=0,
+            evidence=[{"case_id": "c0", "signal": "T1=5/8"}],
+            proposed_promotion_body="T1 dominance for civic ALPR", created_at=now,
+            last_updated_at=now,
+        ),
+    ]))
+
+    # Synthesize a case that will produce a "T1 dominant for civic/alpr" candidate
+    # under a different generated pattern_id
+    case = {
+        "case_id": "c1", "domain_tags": ["civic", "alpr"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.82}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {
+            "source_tiers": {"T1": 8, "T2": 1}, "hop_chain": ["entity_expansion"],
+            "queries": [],
+        },
+    }
+    case_path = cases_dir / "c1.json"
+    case_path.write_text(json.dumps(case))
+
+    # Haiku mock returns is_same=True for any compare
+    def fake_haiku(*, candidate_body, existing_body):
+        return {"is_same": True, "reason": "mock match"}
+
+    result = analyze(
+        case_path=case_path,
+        accumulator_path=acc_path,
+        learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+        haiku_dispatch=fake_haiku,
+    )
+
+    # Reload accumulator and verify the new evidence merged onto "existing-pid",
+    # not a fresh pattern_id
+    from accumulator import load_accumulator
+    acc, _ = load_accumulator(acc_path)
+    existing = next(e for e in acc.entries if e.pattern_id == "existing-pid")
+    assert existing.sessions_seen >= 2, "existing-pid should have accumulated"
+
+
+def test_semantic_merge_disabled_when_haiku_none(tmp_path):
+    """When haiku_dispatch is None, no semantic merge occurs — heuristic
+    candidates always use their own pattern_id (conservative default)."""
+    from case_analyzer import analyze
+    # ... (same scaffolding as above, but analyze() called with haiku_dispatch=None)
+    # Assert: the new candidate created a separate accumulator entry, not merged.
+```
+
+**Step 2-5: verify/iterate/commit**
+
+```bash
+git add tests/test_case_analyzer.py
+git commit -m "test(analyzer): semantic-merge integration (Haiku is_same → reuse pattern_id)"
+```
+
+---
+
+### Task 6.2.2: Contradiction-detection integration test
+
+**Files:**
+- Modify: `tests/test_case_analyzer.py`
+
+**Step 1: Write failing test**
+
+```python
+def test_contradiction_flagged_at_promotion_time(tmp_path):
+    """When an accumulator entry becomes promotion-eligible and the same
+    (domain, target_stage) bucket already has a graduated pattern in
+    learned_patterns.md, the analyzer flags it in result.contradictions."""
+    from case_analyzer import analyze
+    from accumulator import Accumulator, AccumulatorEntry, save_accumulator
+    from learned_patterns import LearnedPatternsFile, LearnedPattern, save_learned_patterns
+    from datetime import datetime, timezone
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+    acc_path = tmp_path / "accumulator.json"
+    lp_path = tmp_path / "learned_patterns.md"
+    now = datetime.now(timezone.utc).isoformat()
+
+    # Seed a graduated pattern in learned_patterns.md
+    save_learned_patterns(lp_path, LearnedPatternsFile(patterns=[
+        LearnedPattern(
+            id="graduated-pid", name="Use broad queries for tech",
+            body="Broad queries outperform narrow.", domain_tags=["tech"],
+            target_stage="search", category="query-template",
+            wins=8, losses=1, promoted_at="2026-04-01", demotion_count=0,
+        ),
+    ]))
+
+    # Seed an accumulator entry already at promotion threshold for the same bucket
+    save_accumulator(acc_path, Accumulator(entries=[
+        AccumulatorEntry(
+            pattern_id="candidate-pid", name="Use narrow queries for tech",
+            category="query-template", target_stage="search",
+            domain_tags=["tech"], sessions_seen=3, sessions_since_last_seen=0,
+            status="hold", raised_bar=False, promotion_pending=False, demotion_count=0,
+            evidence=[{"case_id": "c0", "signal": "narrow=5/6"}],
+            proposed_promotion_body="Narrow queries outperform broad.",
+            created_at=now, last_updated_at=now,
+        ),
+    ]))
+
+    # Drive analyze() — does NOT need to produce new candidates; we just need
+    # the existing accumulator entry to hit the promotion-eligibility check.
+    case = {
+        "case_id": "c1", "domain_tags": ["tech"], "applied_patterns": [],
+        "confidence_per_topic": {"t": 0.8}, "contradiction_rate": 0.1,
+        "outcomes": {"user_decisions": []},
+        "patterns_that_worked": {"source_tiers": {}, "hop_chain": [], "queries": []},
+    }
+    (cases_dir / "c1.json").write_text(json.dumps(case))
+    result = analyze(
+        case_path=cases_dir / "c1.json",
+        accumulator_path=acc_path,
+        learned_patterns_path=lp_path,
+        cases_dir=cases_dir,
+    )
+
+    assert len(result.promotion_candidates) == 1
+    assert result.promotion_candidates[0].pattern_id == "candidate-pid"
+    assert len(result.contradictions) == 1
+    contradiction = result.contradictions[0]
+    assert contradiction["candidate_pattern_id"] == "candidate-pid"
+    assert "graduated-pid" in contradiction["conflicting_graduated_ids"]
+```
+
+**Step 2-5: verify/iterate/commit**
+
+```bash
+git add tests/test_case_analyzer.py
+git commit -m "test(analyzer): contradiction detection at promotion time"
 ```
 
 ---
@@ -3071,14 +3305,16 @@ git commit -m "feat(skill): Stage 4e + Stage 6 inject learned patterns into disp
 
 ---
 
-### Task 8.4: Stage 10b — dispatch analyzer
+### Task 8.4: Stage 10d — dispatch analyzer
 
-**Step 1: Insert Stage 10b in SKILL.md**
+**Important: this stage runs AFTER existing Stage 10c (write_case_record).** v3.0.0 already uses Stage 10b (print summary) and 10c (write case record). The analyzer needs the case JSON to exist, so it can only run after 10c. Use stage label `10d` for the analyzer and `10e` for the graduation prompt — do NOT collide with existing 10b/10c.
 
-After Stage 10a (which writes the case via `complete_run`):
+**Step 1: Insert Stage 10d in SKILL.md**
+
+After existing Stage 10c (`write_case_record`), before any final completion logging:
 
 ```markdown
-### 10b. Run case analyzer (v3.1.0)
+### 10d. Run case analyzer (v3.1.0)
 
 Run via Bash:
 ```bash
@@ -3103,6 +3339,7 @@ print(json.dumps({
          'evidence': c.evidence}
         for c in result.promotion_candidates
     ],
+    'contradictions': result.contradictions,
     'warnings': result.warnings,
     'score_updates_applied': result.score_updates_applied,
     'demotions_applied': result.demotions_applied,
@@ -3112,34 +3349,38 @@ print(json.dumps({
 
 Parse the JSON output.
 
-**Corrupt-state rebuild prompt.** Scan `warnings` for `accumulator_corrupted:` markers. If any are present:
+**Corrupt-state rebuild prompt.** Scan `warnings` for `accumulator_corrupted:` OR `accumulator_schema_mismatch:` markers. If either is present:
 
 Show the user:
 
 ```
-Your accumulator file appears corrupted:
+Your accumulator file is unusable for this run:
 
   {warning text from analyzer}
 
-Rebuild it now by re-running heuristic detection over your case history?
+Rebuild it now by re-running heuristic detection over your FULL case history?
 This loses any previously-rejected pattern flags (you'll need to re-reject
-them as they re-emerge). Skip to continue this run with the corrupt file
-ignored.
+them as they re-emerge). Skip to continue this run with the file ignored.
 
 Rebuild / Skip?
 ```
 
-If `Rebuild`: re-run the same `python -c "..."` Bash invocation above with an additional `force_rebuild_accumulator=True` keyword arg to `analyze()`. The fresh accumulator will be repopulated from this run's candidates. Replace the original analyzer output with the rebuild output.
+If `Rebuild`: re-run the same `python -c "..."` Bash invocation above with TWO additional keyword args:
 
-If `Skip`: continue with the corrupt-state warning logged; the analyzer's output already reflects an empty accumulator for this round.
+- `force_rebuild_accumulator=True` — start the analyzer with an empty accumulator
+- `cases_window=None` — scan ALL cases on disk (not the rolling window of recent N)
 
-If `learned_patterns_schema_mismatch` or `learned_patterns_corrupted` warnings are present, log them but do NOT prompt — that file is human-editable and the user can fix it directly. The pipeline continues with empty learned patterns for this round.
+Replace the original analyzer output with the rebuild output. The accumulator is rewritten from scratch; rejected-flag history is intentionally lost.
+
+If `Skip`: continue with the warning logged; the analyzer's output already reflects an empty accumulator for this round.
+
+**learned_patterns.md corruption — different policy.** If `learned_patterns_schema_mismatch` or `learned_patterns_corrupted` warnings are present, log them but do NOT prompt the user. That file is human-readable; the user can fix it directly with an editor. The pipeline continues with empty learned patterns for this round.
+
+**CRITICAL — guard Stage 10e against silent learned_patterns clobbering.** If `learned_patterns_corrupted` or `learned_patterns_schema_mismatch` is in `warnings`, SKIP Stage 10e entirely for this run — even if promotion candidates were found. Promoting under a corrupt/incompatible file would save an empty file with only the new entry, destroying user data. Log: "Skipping graduation prompts — learned_patterns.md needs manual repair first."
 
 **Normal flow after warnings handling.**
 
-If `promotion_candidates` is non-empty, proceed to Stage 10c. If empty, skip 10c.
-
-If `warnings` is non-empty (including any rebuild-related markers), log them to the final completion summary at Stage 10d.
+If `promotion_candidates` is non-empty AND no `learned_patterns_*` warnings, proceed to Stage 10e. Otherwise skip 10e.
 
 If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised), log to state telemetry and continue silently. The run still completes; the analyzer just didn't update accumulator this round.
 ```
@@ -3153,14 +3394,16 @@ git commit -m "feat(skill): Stage 10b dispatches case analyzer with state lock"
 
 ---
 
-### Task 8.5: Stage 10c — graduation prompt loop
+### Task 8.5: Stage 10e — graduation prompt loop
 
-**Step 1: Insert Stage 10c**
+**Step 1: Insert Stage 10e**
 
 ```markdown
-### 10c. Graduation prompt (v3.1.0, conditional on Stage 10b output)
+### 10e. Graduation prompt (v3.1.0, conditional on Stage 10d output)
 
 For each entry in `promotion_candidates`:
+
+Look up any matching entries in `contradictions` (where `candidate_pattern_id == entry.pattern_id`). If present, include a `⚠️ Possible contradiction` block in the prompt so the user can weigh whether the new pattern conflicts with an existing graduated one.
 
 Show the user:
 
@@ -3175,12 +3418,24 @@ Learned pattern ready for promotion:
     - case {case_id}: {signal}
   {end}
 
+  {if contradictions for this entry:}
+  ⚠️  Possible contradiction with already-graduated patterns
+      in the same domain × stage:
+  {for each conflicting_name:}
+    - {conflicting_name} (id: {conflicting_id})
+  {end}
+  Promoting both keeps them side-by-side and lets the scoring loop
+  sort it out. Rejecting this new pattern preserves the existing rule.
+  {end}
+
 Promote / Reject / Hold?
 ```
 
 Use the user's response:
 
-All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10b uses — without it, concurrent `/research` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
+All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10d uses — without it, concurrent `/research` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
+
+**Precondition for the Promote branch:** Stage 10d already verified that `learned_patterns.md` is parseable (no `learned_patterns_corrupted` / `learned_patterns_schema_mismatch` warnings) BEFORE letting control reach Stage 10e. If those warnings were present, Stage 10d skipped 10e entirely. So inside the Promote branch we can assume `load_learned_patterns()` returns a usable file — but the snippet below still defends against late corruption by checking warnings before saving.
 
 **Promote:**
 
@@ -3196,8 +3451,14 @@ from pathlib import Path
 from state import acquire_state_lock
 
 with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
-    lp, _warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
-    acc, _warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    lp, lp_warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+    if lp_warnings:
+        # Refuse to clobber a corrupt/incompatible file even if Stage 10d
+        # missed the gate (defense in depth). Log and bail.
+        import sys as _sys
+        print(f'PROMOTE_ABORTED: refusing to save over corrupt learned_patterns.md: {lp_warnings}', file=_sys.stderr)
+        _sys.exit(0)
+    acc, _ = load_accumulator(Path('ACCUMULATOR_PATH'))
     entry = next(e for e in acc.entries if e.pattern_id == 'PATTERN_ID')
     # Skip if already in learned_patterns (cross-file transaction recovery —
     # prior promotion wrote learned_patterns but failed to update accumulator)
