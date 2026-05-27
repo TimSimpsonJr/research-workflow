@@ -25,6 +25,28 @@ def _atomic_write(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
+def write_shared_state_atomically(target: Path, content: dict | str) -> None:
+    """Write content to target via temp-file-then-rename. Creates parent dir.
+
+    Accepts dict (serialized as JSON with indent=2) or str (written verbatim).
+    Reuses _atomic_write's discipline: no partial writes survive a crash.
+
+    Public helper for vault-level shared state files (accumulator.json,
+    learned_patterns.md). The private _atomic_write remains dedicated to the
+    per-run state file (current_run.json).
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, dict):
+        body = json.dumps(content, indent=2)
+    elif isinstance(content, str):
+        body = content
+    else:
+        raise TypeError(f"content must be dict or str, got {type(content).__name__}")
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(body, encoding="utf-8", newline="\n")
+    tmp.replace(target)
+
+
 def save_state(state_dir: Path, run: dict) -> None:
     """Save the active run state atomically. Public wrapper around _atomic_write."""
     _atomic_write(state_dir / CURRENT_RUN_FILE, run)

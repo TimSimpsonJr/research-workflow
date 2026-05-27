@@ -611,3 +611,31 @@ def test_write_case_record(tmp_path):
     case_file = cases_dir / "2026-05-26-test.json"
     assert case_file.exists()
     assert json.loads(case_file.read_text()) == case_data
+
+
+def test_write_shared_state_atomically_dict(tmp_path):
+    """write_shared_state_atomically writes a dict as JSON via temp-rename."""
+    from state import write_shared_state_atomically
+    target = tmp_path / "accumulator.json"
+    write_shared_state_atomically(target, {"version": 1, "entries": []})
+    assert target.exists()
+    import json
+    data = json.loads(target.read_text())
+    assert data == {"version": 1, "entries": []}
+
+
+def test_write_shared_state_atomically_str(tmp_path):
+    """write_shared_state_atomically writes a string verbatim."""
+    from state import write_shared_state_atomically
+    target = tmp_path / "learned_patterns.md"
+    body = "---\nversion: 1\n---\n\n## civic / alpr\n"
+    write_shared_state_atomically(target, body)
+    assert target.read_text() == body
+
+
+def test_write_shared_state_atomically_creates_parent(tmp_path):
+    """write_shared_state_atomically creates parent dir if missing."""
+    from state import write_shared_state_atomically
+    target = tmp_path / "nested" / "deeper" / "file.json"
+    write_shared_state_atomically(target, {"x": 1})
+    assert target.exists()
