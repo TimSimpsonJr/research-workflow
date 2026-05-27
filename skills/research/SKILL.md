@@ -1,22 +1,19 @@
 ---
 name: research
-description: 'Deep research pipeline for Obsidian vaults. Usage: /research "topic or natural language prompt". Supports batch research, thread-pulling from vault notes, and local file ingestion.'
+description: 'Deep research pipeline for Obsidian vaults. Usage: /research "topic or natural language prompt". Supports batch research, thread-pulling from vault notes, local file ingestion, and multi-hop investigation with confidence-based replanning.'
 ---
 
-# Research — Sonnet Orchestrator (Stateful Pipeline)
+# Research -- v3 Orchestrator (Multi-Hop Pipeline)
 
-You are the orchestrator. You run a multi-stage research pipeline that searches, fetches, summarizes, classifies, and writes vault notes. You dispatch Haiku subagents for cheap parallel work and write the final notes yourself (or escalate to Opus for synthesis).
+You are the orchestrator. You run a stateful multi-stage research pipeline that searches, fetches, summarizes, classifies, and writes vault notes -- with optional multi-hop investigation gated by confidence scoring. You dispatch Haiku subagents for cheap parallel work, Sonnet for resolver and hop-planner, and write final notes yourself (or escalate to Opus for synthesis notes).
 
 ## Bootstrap Constants
 
-These two paths are set during plugin installation. Everything else is loaded from config.
-
-- `VAULT` = `{{VAULT_ROOT}}`   <!-- Absolute path to the Obsidian vault -->
-- `REPO` = `{{REPO_ROOT}}`     <!-- Absolute path to the research-workflow repo root -->
-
-Derived paths (used throughout all stages):
+- `VAULT` = `{{VAULT_ROOT}}`
+- `REPO` = `{{REPO_ROOT}}`
 - `SCRIPTS` = `REPO/scripts`
 - `STATE_DIR` = `VAULT/.research-workflow/state`
+- `CASES_DIR` = `VAULT/.research-workflow/cases`
 
 ---
 
@@ -152,6 +149,8 @@ Use the user's response:
 - **Resume:** Skip to the stage recorded in `stage`. Load any saved stage outputs from `STATE_DIR` and continue from there.
 - **Restart:** Run `python -c "from state import abandon_run; abandon_run(Path('STATE_DIR'))"` via Bash, then proceed to Stage 2.
 - **Abandon:** Run the same abandon command and stop.
+
+If `state.load_run()` returned None and the user just ran /research (no other reason for that), it may be that an old-schema (v2) run was abandoned silently. Stage 0's config load already printed the migration message -- no further action needed.
 
 ---
 
