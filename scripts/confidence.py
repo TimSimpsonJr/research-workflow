@@ -62,3 +62,12 @@ def compute_confidence(sources: list[dict], depth: str) -> float:
         0.2 * primary_source_presence(sources) +
         0.1 * source_count_adequacy(len(sources), target)
     )
+
+
+def contradiction_rate(sources: list[dict], contradictions: list[dict]) -> float:
+    """Normalize contradictions by (source_count * 0.3). Caps at 1.0."""
+    if len(sources) < 2:
+        return 0.0
+    if not contradictions:
+        return 0.0
+    return min(1.0, len(contradictions) / (len(sources) * 0.3))

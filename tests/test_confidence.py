@@ -2,6 +2,7 @@
 from confidence import (
     DEPTH_PROFILES,
     compute_confidence,
+    contradiction_rate,
     get_depth_profile,
     primary_source_presence,
     source_count_adequacy,
@@ -129,3 +130,29 @@ def test_compute_confidence_weak_topic():
 
 def test_compute_confidence_empty():
     assert compute_confidence([], depth="standard") == 0.0
+
+
+def test_contradiction_rate_none():
+    sources = [{"url": "a"}, {"url": "b"}, {"url": "c"}]
+    contradictions = []
+    assert contradiction_rate(sources, contradictions) == 0.0
+
+
+def test_contradiction_rate_single_pair():
+    sources = [{"url": "a"}, {"url": "b"}, {"url": "c"}]
+    contradictions = [{"source_a": "a", "source_b": "b"}]
+    # 1 / (3 * 0.3) = 1.11 → capped 1.0
+    assert contradiction_rate(sources, contradictions) == 1.0
+
+
+def test_contradiction_rate_proportional():
+    sources = [{"url": f"s{i}"} for i in range(10)]
+    contradictions = [{"source_a": "s0", "source_b": "s1"}]
+    # 1 / (10 * 0.3) ≈ 0.333
+    assert 0.33 <= contradiction_rate(sources, contradictions) <= 0.34
+
+
+def test_contradiction_rate_too_few_sources():
+    sources = [{"url": "a"}]
+    contradictions = []
+    assert contradiction_rate(sources, contradictions) == 0.0
