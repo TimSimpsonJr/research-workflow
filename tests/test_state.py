@@ -689,3 +689,16 @@ def test_acquire_state_lock_breaks_stale_lock(tmp_path):
     (tmp_path / ".lock").write_text(f"{os.getpid() + 99999}\n{stale_ts}\n")
     with acquire_state_lock(tmp_path, timeout_s=1):
         pass  # should succeed, lock was stale
+
+
+def test_acquire_state_lock_releases_on_exception(tmp_path):
+    """Lock file is removed when an exception fires inside the locked block."""
+    from state import acquire_state_lock
+    import pytest
+    with pytest.raises(RuntimeError, match="boom"):
+        with acquire_state_lock(tmp_path, timeout_s=1):
+            raise RuntimeError("boom")
+    assert not (tmp_path / ".lock").exists()
+    # Next acquirer can take the lock cleanly
+    with acquire_state_lock(tmp_path, timeout_s=1):
+        pass
