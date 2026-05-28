@@ -7,8 +7,10 @@ restart, and abandon flows. State lives in the vault at
 """
 
 import json
+import os
 import shutil
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
@@ -23,6 +25,91 @@ def _atomic_write(path: Path, data: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+
+
+def write_shared_state_atomically(target: Path, content: dict | str) -> None:
+    """Write content to target via temp-file-then-rename. Creates parent dir.
+
+    Accepts dict (serialized as JSON with indent=2) or str (written verbatim).
+    Reuses _atomic_write's discipline: no partial writes survive a crash.
+
+    Public helper for vault-level shared state files (accumulator.json,
+    learned_patterns.md). The private _atomic_write remains dedicated to the
+    per-run state file (current_run.json).
+    """
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if isinstance(content, dict):
+        body = json.dumps(content, indent=2, ensure_ascii=False)
+    elif isinstance(content, str):
+        body = content
+    else:
+        raise TypeError(f"content must be dict or str, got {type(content).__name__}")
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    tmp.write_text(body, encoding="utf-8", newline="\n")
+    tmp.replace(target)
+
+
+class LockTimeoutError(Exception):
+    """Raised when state lock can't be acquired within the timeout."""
+
+
+@contextmanager
+def acquire_state_lock(state_root: Path, timeout_s: float = 5.0,
+                       stale_after_hours: int = 1):
+    """Acquire an exclusive lock for shared-state writes (accumulator,
+    learned_patterns). Returns a context manager.
+
+    Lock file at {state_root}/.lock contains: {pid}\\n{iso_timestamp}\\n
+
+    Stale locks (timestamp older than stale_after_hours) are forcibly cleared.
+    Otherwise, waits up to timeout_s for the lock to free up.
+    Raises LockTimeoutError on timeout.
+    """
+    import time
+    state_root.mkdir(parents=True, exist_ok=True)
+    lock_file = state_root / ".lock"
+    deadline = time.monotonic() + timeout_s
+
+    while True:
+        # Check for stale lock
+        if lock_file.exists():
+            try:
+                content = lock_file.read_text().strip().split("\n")
+                if len(content) == 2:
+                    _, ts_str = content
+                    ts = datetime.fromisoformat(ts_str)
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    age = datetime.now(timezone.utc) - ts
+                    if age > timedelta(hours=stale_after_hours):
+                        lock_file.unlink()  # break stale lock
+            except (ValueError, OSError):
+                # malformed lock file — treat as stale
+                try:
+                    lock_file.unlink()
+                except OSError:
+                    pass
+
+        # Try to acquire
+        try:
+            # Atomic create with O_EXCL semantics via exclusive write
+            with open(lock_file, "x") as f:
+                f.write(f"{os.getpid()}\n{datetime.now(timezone.utc).isoformat()}\n")
+            try:
+                yield
+            finally:
+                try:
+                    lock_file.unlink()
+                except OSError:
+                    pass
+            return
+        except FileExistsError:
+            if time.monotonic() >= deadline:
+                raise LockTimeoutError(
+                    f"Could not acquire state lock at {lock_file} within "
+                    f"{timeout_s}s — another /research run may be in progress."
+                )
+            time.sleep(0.1)
 
 
 def save_state(state_dir: Path, run: dict) -> None:
@@ -199,6 +286,27 @@ def record_user_decision(state_dir: Path, decision: str, **details) -> None:
         **details,
     })
     save_state(state_dir, run)
+
+
+def record_applied_pattern(state_dir: Path, pattern_id: str) -> None:
+    """Append a pattern_id to the current run's applied_patterns list.
+
+    Idempotent: duplicate pattern_ids are not re-added. Used by the
+    orchestrator at each subagent dispatch to record which learned patterns
+    were injected into a prompt during the run. At end of run, the analyzer
+    reads applied_patterns from the case to compute W/L scores.
+
+    Silently no-ops if there is no active run (telemetry shouldn't block
+    the pipeline). Uses setdefault so v3.0.0 runs resumed under v3.1.0
+    code still work even if the field was never initialized.
+    """
+    run = load_run(state_dir)
+    if run is None:
+        return
+    applied = run.setdefault("applied_patterns", [])
+    if pattern_id not in applied:
+        applied.append(pattern_id)
+        _atomic_write(state_dir / CURRENT_RUN_FILE, run)
 
 
 _KNOWN_USAGE_MODELS = {"haiku", "sonnet", "opus", "ollama"}
@@ -393,6 +501,7 @@ def create_run(state_dir: Path, run_id: str, tier: str) -> dict:
         },
         "replan_count": 0,
         "user_decisions": [],
+        "applied_patterns": [],
     }
     _atomic_write(run_file, run)
     return run

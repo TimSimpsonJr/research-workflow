@@ -1,0 +1,242 @@
+[
+  {
+    "case_id": "2026-03-12-greenville-alpr-program",
+    "version": 1,
+    "query": "How is the Greenville ALPR program being deployed in 2025?",
+    "domain_tags": ["civic", "alpr"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"greenville-alpr-program": 0.78},
+    "contradiction_rate": 0.1,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": [
+        "Greenville ALPR program 2025",
+        "Greenville police license plate reader policy"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 2},
+      "hop_chain": [],
+      "queries": ["alpr conspiracy reddit thread"]
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-03-18-charleston-alpr-program",
+    "version": 1,
+    "query": "Charleston police ALPR rollout in 2024",
+    "domain_tags": ["civic", "alpr"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"charleston-alpr-program": 0.82},
+    "contradiction_rate": 0.05,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 9, "T2": 2, "T3": 0, "T4": 0},
+      "hop_chain": ["entity_expansion", "temporal_progression"],
+      "queries": [
+        "Charleston ALPR program 2024",
+        "Charleston city council license plate reader vote"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 0, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-03-25-columbia-alpr-program",
+    "version": 1,
+    "query": "Columbia ALPR deployment timeline 2023",
+    "domain_tags": ["civic", "alpr"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"columbia-alpr-program": 0.71},
+    "contradiction_rate": 0.12,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 7, "T2": 3, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": [
+        "Columbia ALPR program 2023",
+        "Columbia police data retention policy"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 1, "T3": 0, "T4": 1},
+      "hop_chain": [],
+      "queries": ["columbia alpr speculation"]
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-02-spartanburg-alpr-program",
+    "version": 1,
+    "query": "Spartanburg ALPR pilot program update 2025",
+    "domain_tags": ["civic", "alpr"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"spartanburg-alpr-program": 0.74},
+    "contradiction_rate": 0.08,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": [
+        "Spartanburg ALPR program 2025",
+        "Spartanburg county sheriff Flock Safety contract"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-10-mount-pleasant-alpr",
+    "version": 1,
+    "query": "Mount Pleasant ALPR coverage and vendor selection 2024",
+    "domain_tags": ["civic", "alpr"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"mount-pleasant-alpr": 0.79},
+    "contradiction_rate": 0.06,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 9, "T2": 1, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "entity_expansion"],
+      "queries": [
+        "Mount Pleasant ALPR program 2024",
+        "Mount Pleasant police chief license plate reader testimony"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 0, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-18-flock-safety-vendor",
+    "version": 1,
+    "query": "license plate reader vendor Flock Safety contracts in the Carolinas",
+    "domain_tags": ["civic", "alpr"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"flock-safety-vendor": 0.68},
+    "contradiction_rate": 0.15,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 7, "T2": 2, "T3": 2, "T4": 0},
+      "hop_chain": ["entity_expansion", "causal_chain"],
+      "queries": [
+        "license plate reader vendor Flock Safety",
+        "Flock Safety contract disclosure FOIA"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 2, "T4": 1},
+      "hop_chain": [],
+      "queries": ["flock safety marketing brochure"]
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-04-25-civil-liberties-alpr",
+    "query": "ACLU concerns about ALPR data retention",
+    "version": 1,
+    "domain_tags": ["civic", "alpr"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"civil-liberties-alpr": 0.66},
+    "contradiction_rate": 0.18,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "conceptual_deepening"],
+      "queries": [
+        "civil liberties ALPR concerns",
+        "ACLU position paper license plate reader retention"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  },
+  {
+    "case_id": "2026-05-02-alpr-state-policy",
+    "version": 1,
+    "query": "state-level policy frameworks for ALPR transparency",
+    "domain_tags": ["civic", "alpr"],
+    "strategy_used": "unified",
+    "depths_used": {"quick": 0, "standard": 1, "deep": 0, "exhaustive": 0},
+    "hops_executed": 2,
+    "confidence_per_topic": {"alpr-state-policy": 0.73},
+    "contradiction_rate": 0.09,
+    "patterns_that_worked": {
+      "source_tiers": {"T1": 8, "T2": 2, "T3": 1, "T4": 0},
+      "hop_chain": ["entity_expansion", "conceptual_deepening"],
+      "queries": [
+        "alpr transparency model legislation",
+        "state attorney general ALPR data sharing guidance"
+      ]
+    },
+    "patterns_that_failed": {
+      "source_tiers": {"T1": 0, "T2": 0, "T3": 1, "T4": 1},
+      "hop_chain": [],
+      "queries": []
+    },
+    "outcomes": {
+      "sources_processed": 11,
+      "notes_created": 1,
+      "notes_updated": 0,
+      "user_decisions": []
+    }
+  }
+]

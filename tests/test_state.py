@@ -33,6 +33,17 @@ def test_create_run_initial_stage_is_triage(tmp_path):
     assert run["stage"] == "triage"
 
 
+def test_create_run_has_empty_applied_patterns(tmp_path):
+    """v3.1.0 runs initialize with an empty applied_patterns list."""
+    from state import create_run, load_run
+    run = create_run(tmp_path, run_id="test-v31-applied", tier="base")
+    assert "applied_patterns" in run
+    assert run["applied_patterns"] == []
+    # Round-trip via load_run too
+    persisted = load_run(tmp_path)
+    assert persisted["applied_patterns"] == []
+
+
 def test_create_run_fails_if_run_exists(tmp_path):
     from state import create_run
     create_run(tmp_path, "run1", "base")
@@ -512,6 +523,20 @@ def test_record_user_decision(tmp_path):
     assert "at" in decisions[0]
 
 
+def test_record_applied_pattern_appends_unique(tmp_path):
+    """record_applied_pattern adds a pattern_id; duplicates are no-ops."""
+    from state import create_run, record_applied_pattern, load_run
+    create_run(tmp_path, run_id="t", tier="base")
+    record_applied_pattern(tmp_path, "civic-alpr-t1-dominance-3f7a")
+    record_applied_pattern(tmp_path, "tech-entity-h2-9c2b")
+    record_applied_pattern(tmp_path, "civic-alpr-t1-dominance-3f7a")  # dup
+    run = load_run(tmp_path)
+    assert run["applied_patterns"] == [
+        "civic-alpr-t1-dominance-3f7a",
+        "tech-entity-h2-9c2b",
+    ]
+
+
 def test_record_user_decision_rejects_reserved_keys(tmp_path):
     """Caller-supplied 'decision' or 'at' in **details would silently override canonical fields."""
     import pytest
@@ -586,3 +611,94 @@ def test_write_case_record(tmp_path):
     case_file = cases_dir / "2026-05-26-test.json"
     assert case_file.exists()
     assert json.loads(case_file.read_text()) == case_data
+
+
+def test_write_shared_state_atomically_dict(tmp_path):
+    """write_shared_state_atomically writes a dict as JSON via temp-rename."""
+    from state import write_shared_state_atomically
+    target = tmp_path / "accumulator.json"
+    write_shared_state_atomically(target, {"version": 1, "entries": []})
+    assert target.exists()
+    import json
+    data = json.loads(target.read_text())
+    assert data == {"version": 1, "entries": []}
+
+
+def test_write_shared_state_atomically_str(tmp_path):
+    """write_shared_state_atomically writes a string verbatim."""
+    from state import write_shared_state_atomically
+    target = tmp_path / "learned_patterns.md"
+    body = "---\nversion: 1\n---\n\n## civic / alpr\n"
+    write_shared_state_atomically(target, body)
+    assert target.read_text() == body
+
+
+def test_write_shared_state_atomically_creates_parent(tmp_path):
+    """write_shared_state_atomically creates parent dir if missing."""
+    from state import write_shared_state_atomically
+    target = tmp_path / "nested" / "deeper" / "file.json"
+    write_shared_state_atomically(target, {"x": 1})
+    assert target.exists()
+
+
+def test_write_shared_state_atomically_preserves_unicode(tmp_path):
+    """Unicode characters survive without being escaped to \\uXXXX."""
+    from state import write_shared_state_atomically
+    import json
+    target = tmp_path / "accumulator.json"
+    payload = {
+        "name": "T1 sources dominate — civic ALPR",
+        "note": "Smart “quotes” round-trip cleanly"
+    }
+    write_shared_state_atomically(target, payload)
+    raw = target.read_text(encoding="utf-8")
+    # Body should contain the literal Unicode characters, not escaped \uXXXX sequences
+    assert "—" in raw, f"em-dash should be literal, got: {raw}"
+    assert "“" in raw, f"smart quote should be literal, got: {raw}"
+    # Round-trip is also fine
+    assert json.loads(raw) == payload
+
+
+def test_acquire_state_lock_succeeds_when_unheld(tmp_path):
+    """acquire_state_lock returns a context manager that holds the lock."""
+    from state import acquire_state_lock
+    with acquire_state_lock(tmp_path, timeout_s=1):
+        assert (tmp_path / ".lock").exists()
+    assert not (tmp_path / ".lock").exists()
+
+
+def test_acquire_state_lock_times_out_when_held(tmp_path):
+    """acquire_state_lock raises TimeoutError when another process holds it."""
+    from state import acquire_state_lock, LockTimeoutError
+    import pytest
+    # Simulate another holder: write a lock file with current PID + fresh timestamp
+    import os
+    from datetime import datetime, timezone
+    (tmp_path / ".lock").write_text(f"{os.getpid() + 99999}\n{datetime.now(timezone.utc).isoformat()}\n")
+    with pytest.raises(LockTimeoutError):
+        with acquire_state_lock(tmp_path, timeout_s=0.5):
+            pass
+
+
+def test_acquire_state_lock_breaks_stale_lock(tmp_path):
+    """Stale locks (timestamp >1hr old) are forcibly cleared."""
+    from state import acquire_state_lock
+    import os
+    from datetime import datetime, timezone, timedelta
+    stale_ts = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    (tmp_path / ".lock").write_text(f"{os.getpid() + 99999}\n{stale_ts}\n")
+    with acquire_state_lock(tmp_path, timeout_s=1):
+        pass  # should succeed, lock was stale
+
+
+def test_acquire_state_lock_releases_on_exception(tmp_path):
+    """Lock file is removed when an exception fires inside the locked block."""
+    from state import acquire_state_lock
+    import pytest
+    with pytest.raises(RuntimeError, match="boom"):
+        with acquire_state_lock(tmp_path, timeout_s=1):
+            raise RuntimeError("boom")
+    assert not (tmp_path / ".lock").exists()
+    # Next acquirer can take the lock cleanly
+    with acquire_state_lock(tmp_path, timeout_s=1):
+        pass

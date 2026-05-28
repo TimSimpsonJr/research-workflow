@@ -212,9 +212,9 @@ save_state(Path('STATE_DIR'), run)
 
 Then branch by strategy:
 
-- `planning_only`: continue to Stage 2e (one-line confirm) with the resolved topics from this response.
+- `planning_only`: continue to Stage 2e (one-line confirm) with the resolved topics from this response, then Stage 2f.
 - `intent_planning`: continue to Stage 2d (Q&A loop).
-- `unified`: continue to Stage 3 (full resolve+plan flow with depth column). Note: the resolver has ALREADY produced topics; Stage 3 uses them rather than re-dispatching.
+- `unified`: continue to Stage 3 (full resolve+plan flow with depth column), then Stage 2f before Stage 4. Note: the resolver has ALREADY produced topics; Stage 3 uses them rather than re-dispatching.
 
 ### 2d. Intent-planning Q&A (if applicable)
 
@@ -261,7 +261,7 @@ Only entered when strategy is `planning_only`. Show the user:
 Researching {project} at depth {topic.depth}, ~{estimated_minutes}min. Proceed? [yes / edit / cancel]
 ```
 
-- `yes`: initialize topics from the resolver response (see snippet below), then skip to Stage 4 (hop loop). Stage 3 is bypassed. Strategy was already persisted in 2c.
+- `yes`: initialize topics from the resolver response (see snippet below), then run Stage 2f, then skip to Stage 4 (hop loop). Stage 3 is bypassed. Strategy was already persisted in 2c.
 - `edit`: upgrade to `unified` strategy -- present the full plan as in Stage 3a below. The run is already created; Stage 3 will populate topics and approve. Also overwrite `run['strategy'] = 'unified'` since the user chose to upgrade.
 - `cancel`: call `abandon_run(STATE_DIR)` and stop.
 
@@ -283,7 +283,37 @@ update_stage(state_dir, 'hop_loop')
 "
 ```
 
-Note: strategy persistence now happens once in Stage 2c (immediately after the resolver returns), so every path through Stage 2 ends with `run["strategy"]` set. No separate 2f step needed.
+Note: strategy persistence now happens once in Stage 2c (immediately after the resolver returns), so every path through Stage 2 ends with `run["strategy"]` set.
+
+### 2f. Load learned patterns (v3.1.0)
+
+**When to run:** Once per /research invocation, after Stage 2 has selected a strategy and Stage 3 has produced the resolved topics list. Every path through Stage 2 (planning_only via 2e, intent_planning via 2d->2e, unified via Stage 3) must run Stage 2f BEFORE entering Stage 4 -- Stage 4a/4e and Stage 6 rely on `LEARNED_BY_STAGE` being populated by 2f. If you got here from 2e's `yes` branch, run 2f next, then enter Stage 4. If you got here from Stage 3b, run 2f, then enter Stage 4.
+
+Run via Bash:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from learned_patterns import load_learned_patterns, filter_by_topic_text, group_by_stage
+from pathlib import Path
+lp, _warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+relevant = filter_by_topic_text(lp, topics=TOPIC_STRINGS)
+grouped = group_by_stage(relevant)
+print(json.dumps({stage: [p.id for p in patterns] for stage, patterns in grouped.items()}))
+"
+```
+
+Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`. Substitute `TOPIC_STRINGS` with the list of topic strings from the resolver output (Stage 3's `final['topics']` -- use each topic's `topic` field).
+
+**Why topic-text matching, not `domain_tags` matching at this stage:** v3.0.0 only derives `domain_tags` at case-write time (Stage 10c), computed from tags assigned to written notes. At Stage 2 no notes exist yet. Topic strings are the strongest signal we have for relevance. Stage 10d's analyzer uses real `domain_tags` from the just-written case via `filter_relevant`.
+
+**Known limitation of substring-only matching:** patterns tagged with high-level concepts that don't appear verbatim in topic text (e.g., a pattern tagged `["civic"]` from a prior run won't match the topic `"ALPR programs in Greenville"` because "civic" isn't in the topic string). This is intentional for v3.1.0 -- broader semantic matching would require an additional classification step at Stage 2 (cost we don't want to pay yet). The user benefits less from learned patterns early in a run but gets full credit at Stage 10b scoring once `domain_tags` are derived from written notes. Revisit for v3.2.0 if real usage shows this is too lossy.
+
+Parse the JSON output and store:
+- `LEARNED_BY_STAGE` = the returned dict mapping `search` / `hop_planner` / `classify` -> list of pattern IDs
+
+If the file doesn't exist or returns empty, set `LEARNED_BY_STAGE = {"search": [], "hop_planner": [], "classify": []}`. Continue silently.
 
 ---
 
@@ -366,6 +396,8 @@ save_stage_output(state_dir, 'research_plan', PLAN_JSON)
 
 Where `PLAN_JSON` is the parsed JSON from the resolver, serialized as a Python dict literal.
 
+Run Stage 2f before entering Stage 4.
+
 ---
 
 ## Stage 4: Hop Loop
@@ -419,6 +451,44 @@ The search-agent's prompt template doesn't change. The orchestrator prepends a h
 HOP CONTEXT: This is hop {N} of {max_hops} for topic "{topic}". Use the {pattern} pattern, focusing on "{from}". Skip URLs in seen_urls.
 {if replan_hint: "Previous gap: " + replan_hint.issue}
 ```
+
+**Learned-pattern injection (v3.1.0):** if `LEARNED_BY_STAGE["search"]` is non-empty, ALSO load each pattern's full record and append a `## Learned Patterns` block to the search-agent prompt:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from learned_patterns import load_learned_patterns
+from pathlib import Path
+lp, _warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+ids = LEARNED_IDS_FOR_STAGE
+out = [{'id': p.id, 'name': p.name, 'body': p.body} for p in lp.patterns if p.id in ids]
+print(json.dumps(out))
+"
+```
+
+Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md` and pass `LEARNED_IDS_FOR_STAGE` as the list `LEARNED_BY_STAGE["search"]`.
+
+Build a `## Learned Patterns` block from the returned records (4-space indented to show the literal markdown the orchestrator emits):
+
+    ## Learned Patterns (from prior runs, may or may not apply)
+
+    - **{name}** -- {body}
+
+    (repeat per pattern)
+
+Append this block to the search-agent's user prompt under the existing context. Then, for each pattern surfaced, record it in run state:
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'SCRIPTS')
+from state import record_applied_pattern
+from pathlib import Path
+record_applied_pattern(Path('STATE_DIR'), 'PATTERN_ID')
+"
+```
+
+Run once per pattern id.
 
 Batch dispatches at <=5 topics per round.
 
@@ -495,6 +565,8 @@ seen_urls: {topic.seen_urls}
 vault_index_path: {VAULT}/.research-workflow/vault_index.db
 scripts_dir: SCRIPTS
 ```
+
+**Learned-pattern injection (v3.1.0):** same shape as Stage 4a's learned-pattern injection, but for the hop-planner stage. If `LEARNED_BY_STAGE["hop_planner"]` is non-empty, load each pattern's full record via `load_learned_patterns` (filter by the IDs in `LEARNED_BY_STAGE["hop_planner"]`), append a `## Learned Patterns` block to the hop-planner's dispatch prompt under the existing context, then call `record_applied_pattern(STATE_DIR, pattern_id)` once per surfaced pattern. See Stage 4a for the exact Bash snippets to reuse.
 
 Parse each hop-planner response. **Apply the full transition atomically via `apply_hop_decision()`** -- never via the per-field setters in this stage. The atomic helper persists genealogy + current_hop + confidence_history + contradiction_rate + next_hop / replan_hint / status in a single load -> mutate -> save cycle, so a crash partway through the transition cannot leave a topic with mismatched state (hop recorded but quality signals stale, status updated but routing stale, etc.).
 
@@ -768,6 +840,8 @@ Dispatch via the Task tool:
   "shared_context_files": {from the research plan}
 }
 ```
+
+**Learned-pattern injection (v3.1.0):** same shape as Stage 4a's learned-pattern injection, but for the classify stage. If `LEARNED_BY_STAGE["classify"]` is non-empty, load each pattern's full record via `load_learned_patterns` (filter by the IDs in `LEARNED_BY_STAGE["classify"]`), append a `## Learned Patterns` block to the classify-agent's dispatch prompt under the existing JSON context, then call `record_applied_pattern(STATE_DIR, pattern_id)` once per surfaced pattern. See Stage 4a for the exact Bash snippets to reuse.
 
 ### 6c. Parse classification
 
@@ -1257,6 +1331,7 @@ case = {
     'contradiction_rate': max((t.get('contradiction_rate', 0.0) for t in final['topics']), default=0.0),
     'patterns_that_worked': PATTERNS_WORKED,
     'patterns_that_failed': PATTERNS_FAILED,
+    'applied_patterns': final.get('applied_patterns', []),
     'outcomes': {
         'sources_processed': SOURCES_COUNT,
         'notes_created': CREATED_COUNT,
@@ -1269,6 +1344,216 @@ write_case_record(cases_dir, case)
 ```
 
 The orchestrator writes `final` to a temp JSON file between 10a and 10c (typical pattern: write the captured JSON to `STATE_DIR/../tmp/final_run.json` for the duration of 10b/10c, then delete). DERIVED_TAGS comes from the most common tags across written notes. PATTERNS_WORKED / PATTERNS_FAILED come from per-hop telemetry (patterns that produced novel notes vs. dead ends).
+
+### 10d. Run case analyzer (v3.1.0)
+
+Run via Bash:
+
+```bash
+python -c "
+import sys, json
+sys.path.insert(0, 'SCRIPTS')
+from case_analyzer import analyze
+from pathlib import Path
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    result = analyze(
+        case_path=Path('CASE_PATH'),
+        accumulator_path=Path('ACCUMULATOR_PATH'),
+        learned_patterns_path=Path('LEARNED_PATTERNS_PATH'),
+        cases_dir=Path('CASES_DIR'),
+    )
+print(json.dumps({
+    'promotion_candidates': [
+        {'pattern_id': c.pattern_id, 'name': c.name,
+         'proposed_promotion_body': c.proposed_promotion_body,
+         'evidence': c.evidence}
+        for c in result.promotion_candidates
+    ],
+    'contradictions': result.contradictions,
+    'warnings': result.warnings,
+    'score_updates_applied': result.score_updates_applied,
+    'demotions_applied': result.demotions_applied,
+}))
+"
+```
+
+Substitute `STATE_ROOT_FOR_VAULT` with `{VAULT}/.research-workflow/`, `CASE_PATH` with the path to the just-written case JSON (under `{VAULT}/.research-workflow/cases/`), `ACCUMULATOR_PATH` with `{VAULT}/.research-workflow/accumulator.json`, `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`, and `CASES_DIR` with `{VAULT}/.research-workflow/cases/`.
+
+Parse the JSON output.
+
+**Corruption handling (v3.1.0 policy: no automatic recovery, no rebuild UX).**
+
+`analyze()` itself protects state files: if `accumulator.json` or `learned_patterns.md` could not be parsed (or had a schema-version mismatch), the analyzer **does not write back to that file**. So a corrupt file stays as-is on disk -- the user can inspect or recover it. The trade-off is that any in-memory updates (score increments, new candidates, demotion sweep results) that would have touched the corrupted store are discarded for this run.
+
+If `warnings` contains any of these markers:
+- `accumulator_corrupted: ...`
+- `accumulator_schema_mismatch: ...`
+- `learned_patterns_corrupted: ...`
+- `learned_patterns_schema_mismatch: ...`
+
+Surface them to the user at Stage 10d output (these flow through to Stage 10's completion summary anyway via state telemetry), with a clear advisory:
+
+```
+WARNING: v3.1.0 pattern learning state was not updated this run:
+  {warning text(s) from analyzer}
+
+To reset the affected store, delete the file manually:
+  {VAULT}/.research-workflow/accumulator.json
+  {VAULT}/.research-workflow/learned_patterns.md
+The next /research run will start with an empty store and rebuild from
+new cases going forward. Existing case history at
+{VAULT}/.research-workflow/cases/ is unaffected.
+```
+
+(There is no in-pipeline rebuild flow in v3.1.0. Corrupt-state recovery is rare; the simpler "user deletes file -> fresh start" path was preferred over carrying the complexity of a rebuild-from-history mechanism. Revisit in v3.1.x if real usage shows this is too coarse.)
+
+**Stage 10e gating.** If any `learned_patterns_*` OR `accumulator_*` warning is present, **skip Stage 10e entirely for this run** -- even if `promotion_candidates` is non-empty. Stage 10e's promote/reject/hold branches would otherwise be unable to safely write the affected store (analyzer refused the write, so the load returns empty + warning, and a save would clobber the recoverable file). Log: "Skipping graduation prompts -- `learned_patterns.md` or `accumulator.json` needs manual repair first."
+
+**Normal flow after warnings handling.**
+
+If `promotion_candidates` is non-empty AND no `learned_patterns_*` or `accumulator_*` warnings, proceed to Stage 10e. Otherwise skip 10e.
+
+If the analyzer fails entirely (script exits non-zero or LockTimeoutError raised), log to state telemetry and continue silently. The run still completes; the analyzer just didn't update state this round.
+
+### 10e. Graduation prompt (v3.1.0, conditional on Stage 10d output)
+
+For each entry in `promotion_candidates`:
+
+Look up any matching entries in `contradictions` (where `candidate_pattern_id == entry.pattern_id`). If present, include a `Possible contradiction` block in the prompt so the user can weigh whether the new pattern conflicts with an existing graduated one.
+
+Show the user:
+
+```
+Learned pattern ready for promotion:
+
+  Name: {name}
+  Proposed body: {proposed_promotion_body}
+
+  Evidence:
+  {for each row in evidence:}
+    - case {case_id}: {signal}
+  {end}
+
+  {if contradictions for this entry:}
+  WARNING: Possible contradiction with already-graduated patterns
+      in the same domain x stage:
+  {for each conflicting_name:}
+    - {conflicting_name} (id: {conflicting_id})
+  {end}
+  Promoting both keeps them side-by-side and lets the scoring loop
+  sort it out. Rejecting this new pattern preserves the existing rule.
+  {end}
+
+Promote / Reject / Hold?
+```
+
+Use the user's response:
+
+All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10d uses -- without it, concurrent `/research` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
+
+**Precondition for all three branches:** Stage 10d already verified that BOTH `learned_patterns.md` AND `accumulator.json` are parseable (no `learned_patterns_*` and no `accumulator_*` warnings) BEFORE letting control reach Stage 10e. If any such warning was present, Stage 10d skipped 10e entirely. So inside each branch we can assume the loaders return a usable file -- but every branch still defends against late corruption by checking warnings before saving (`BRANCH_ABORTED` on mismatch). The Reject and Hold branches would otherwise silently overwrite a recoverable corrupt accumulator with empty content.
+
+**Promote:**
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'SCRIPTS')
+from accumulator import load_accumulator, save_accumulator, remove_entry
+from learned_patterns import (
+    load_learned_patterns, save_learned_patterns, LearnedPattern
+)
+from datetime import datetime, timezone
+from pathlib import Path
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    lp, lp_warnings = load_learned_patterns(Path('LEARNED_PATTERNS_PATH'))
+    if lp_warnings:
+        # Refuse to clobber a corrupt/incompatible file even if Stage 10d
+        # missed the gate (defense in depth). Log and bail.
+        import sys as _sys
+        print(f'BRANCH_ABORTED: refusing to save over corrupt learned_patterns.md: {lp_warnings}', file=_sys.stderr)
+        _sys.exit(0)
+    acc, acc_warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    if acc_warnings:
+        # Same defense for the accumulator side -- without this check the
+        # next(...) lookup below would raise StopIteration on the empty
+        # fallback, masking the real failure with an opaque crash.
+        import sys as _sys
+        print(f'BRANCH_ABORTED: refusing to save over corrupt accumulator.json: {acc_warnings}', file=_sys.stderr)
+        _sys.exit(0)
+    entry = next(e for e in acc.entries if e.pattern_id == 'PATTERN_ID')
+    # Skip if already in learned_patterns (cross-file transaction recovery --
+    # prior promotion wrote learned_patterns but failed to update accumulator)
+    if not any(p.id == entry.pattern_id for p in lp.patterns):
+        lp.patterns.append(LearnedPattern(
+            id=entry.pattern_id,
+            name=entry.name,
+            body=entry.proposed_promotion_body,
+            domain_tags=entry.domain_tags,
+            target_stage=entry.target_stage,
+            category=entry.category,
+            wins=0, losses=0,
+            promoted_at=datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+            demotion_count=entry.demotion_count,
+        ))
+        # Write order: learned_patterns FIRST, then accumulator
+        save_learned_patterns(Path('LEARNED_PATTERNS_PATH'), lp)
+    remove_entry(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+"
+```
+
+**Reject:**
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'SCRIPTS')
+from accumulator import load_accumulator, save_accumulator, mark_rejected
+from pathlib import Path
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    acc, acc_warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    if acc_warnings:
+        # Defense in depth: Stage 10d should have skipped 10e if the
+        # accumulator was corrupt, but without this guard a `mark_rejected`
+        # + `save_accumulator` on the empty fallback would clobber the
+        # recoverable corrupt file with empty content.
+        import sys as _sys
+        print(f'BRANCH_ABORTED: refusing to save over corrupt accumulator.json: {acc_warnings}', file=_sys.stderr)
+        _sys.exit(0)
+    mark_rejected(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+"
+```
+
+**Hold:**
+
+```bash
+python -c "
+import sys; sys.path.insert(0, 'SCRIPTS')
+from accumulator import load_accumulator, save_accumulator, clear_promotion_pending
+from pathlib import Path
+from state import acquire_state_lock
+
+with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
+    acc, acc_warnings = load_accumulator(Path('ACCUMULATOR_PATH'))
+    if acc_warnings:
+        # Same defense as Reject -- a `clear_promotion_pending` +
+        # `save_accumulator` on the empty fallback would clobber the
+        # recoverable corrupt file with empty content.
+        import sys as _sys
+        print(f'BRANCH_ABORTED: refusing to save over corrupt accumulator.json: {acc_warnings}', file=_sys.stderr)
+        _sys.exit(0)
+    clear_promotion_pending(acc, 'PATTERN_ID')
+    save_accumulator(Path('ACCUMULATOR_PATH'), acc)
+"
+```
+
+If the user aborts (Ctrl+C, dismisses, walks away), do nothing. The `promotion_pending` flag remains set on the accumulator entry, and next-run Stage 10e will re-prompt.
 
 ---
 
