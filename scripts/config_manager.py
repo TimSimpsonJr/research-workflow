@@ -29,6 +29,11 @@ def default_config(vault_root: str) -> dict:
         "whisper_available": False,
         "ytdlp_available": False,
         "tier": "base",
+        # When true AND the `librarian` plugin is installed, Stage 7 delegates
+        # note-writing to Librarian's writer instead of the inline write path.
+        # Default false: behavior is unchanged and identical to pre-Librarian
+        # research-workflow. A config missing this key is treated as false.
+        "use_librarian": False,
     }
 
 
