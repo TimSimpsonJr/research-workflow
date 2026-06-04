@@ -879,6 +879,50 @@ Substitute `CLASSIFICATION_JSON` with the parsed dict from Stage 6c, serialized 
 
 This is the core stage. **You (the Sonnet orchestrator) write the notes.** For synthesis notes, you escalate to Opus.
 
+### 7.0 OPTIONAL — Delegate the write to the Librarian plugin (feature-flagged, default OFF)
+
+> **This is a "prove the call path" shim, not a full migration.** It demonstrates that research-workflow *can* hand its note-writing to the standalone Librarian plugin behind a feature flag. The full migration (retiring the inline write path below) is a deliberate fast-follow and is NOT done here. By default this block does nothing and Stage 7 runs exactly as it always has.
+
+**Gate.** Take the Librarian path ONLY if BOTH conditions hold:
+
+1. `config.use_librarian` is `true` (from Stage 0's loaded config; a config missing this key counts as `false`), AND
+2. the `librarian` plugin is actually available in this session (its `librarian` skill / `scripts/write_note.py` writer is installed and invokable).
+
+If EITHER condition is false — which is the **default** — skip this entire subsection and proceed to **7a** below. The inline write path (7a–7d) is the unchanged, canonical behavior; nothing about it is modified by this shim, so a run with the flag off is byte-for-byte identical to research-workflow before Librarian existed.
+
+**If the gate passes**, do the following instead of 7a–7d:
+
+1. **Build Librarian's neutral input contract.** Transform each entry of `classification.notes_to_create[]` into one Librarian note spec. Librarian's writer (`write_note(spec, out_dir)`, invoked via the `librarian` skill) consumes a list of objects shaped:
+
+   `[{title, content, frontmatter_meta, citations, link_hints, priority, action}]`
+
+   plus an optional top-level `vault_context` (pass research-workflow's `classification.vault_context` through unchanged so Librarian can resolve placement and existing-note context).
+
+   Field mapping, research-workflow note spec → Librarian neutral contract:
+
+   | research-workflow note spec field         | Librarian contract field | notes |
+   |-------------------------------------------|--------------------------|-------|
+   | `title`                                   | `title`                  | direct pass-through |
+   | the authored note body (composed per 7c.v, using `content_summary` as the writing guide) | `content` | **you still author the body here**, applying the same frontmatter/callout/wikilink/sources rules from 7c.v; `content` is the finished Markdown body. `content_summary` is *guidance*, not the body — expand it into full prose as today. |
+   | `tags` + `type`                           | `frontmatter_meta`       | merge into one metadata object, e.g. `{ "tags": [...], "type": "..." }` |
+   | `source_urls`                             | `citations`              | the source URLs backing the note |
+   | `links` + `stub_links`                    | `link_hints`             | concatenate; Librarian decides which become `[[wikilinks]]` vs. stubs |
+   | `priority`                                | `priority`               | pass-through (`primary` / `secondary` / `scan`) |
+   | `action`                                  | `action`                 | pass-through (`create` / `update`) |
+
+   **Dropped fields (do NOT forward):**
+   - `write_model` — research-workflow's own model-routing concern; Librarian does not consume it.
+   - `media` — dead v2 field (empty by design in v3; see 7c.v "Media embeds"). Source-inlined `![[path]]` embeds already live inside the `content` body, so they travel with `content`.
+   - `filename` / `folder` — Librarian *derives* placement itself; do not pin it.
+
+2. **Delegate the write.** Hand the assembled spec list (plus `vault_context`) to the Librarian plugin's writer via the `librarian` skill. Librarian performs its own classify → write → wikilink for each spec and writes the notes to the vault.
+
+3. **Reconcile.** After Librarian returns the written-note paths, still run research-workflow's own bookkeeping so the rest of the pipeline is unaffected: record each written note via `append_written_note` (7c.vii), update progress via `update_stage('write', ...)` (7c.viii), and apply the MOC updates in **7d**. Then skip to Stage 8.
+
+If the Librarian writer errors or is unexpectedly unavailable after the gate passed, fall back to the inline path (7a–7d) so the run still completes.
+
+---
+
 ### 7a. Aggregate per-hop fetch results
 
 Stage 4 produces one `fetch_results_hop{N}.json` per hop. Before writing notes, merge them into a single url -> content lookup so 7c.iii (full-source-content recovery) doesn't have to re-glob and re-parse per note. **Write atomically via temp+rename** so a crash mid-write cannot leave a corrupt JSON file on disk — the Resume Flow only rebuilds when the file is missing or unparseable, not when it merely looks "present":
