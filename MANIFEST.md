@@ -24,10 +24,10 @@ agents/
   case-analyzer.md                     # Haiku — semantic-compare for accumulator merge (v3.1)
 
 scripts/
-  config_manager.py                    # JSON vault config at {vault}/.research-workflow/config.json
+  config_manager.py                    # JSON vault config at {vault}/.researcher/config.json
   state.py                             # v3 schema + atomic transitions (apply_hop_decision, apply_replan_readmit, acquire_state_lock)
-  accumulator.py                       # v3.1 — JSON-backed store of candidate patterns at {vault}/.research-workflow/accumulator.json
-  learned_patterns.py                  # v3.1 — Markdown parser/writer for graduated patterns at {vault}/.research-workflow/learned_patterns.md
+  accumulator.py                       # v3.1 — JSON-backed store of candidate patterns at {vault}/.researcher/accumulator.json
+  learned_patterns.py                  # v3.1 — Markdown parser/writer for graduated patterns at {vault}/.researcher/learned_patterns.md
   pattern_detection.py                 # v3.1 — pure-Python heuristic candidate detectors (tier dominance, hop dominance, query recurrence)
   score_updates.py                     # v3.1 — run-level W/L computation, score-apply, demotion sweep
   case_analyzer.py                     # v3.1 — Stage 10d top-level analyzer wiring heuristics + accumulator + learned + scoring
@@ -74,4 +74,4 @@ docs/plans/, docs/handoffs/            # Design docs (gitignored except force-ad
 - `vault_lint.py` and `find_broken_links.py` run as post-write quality gates, reporting violations in the completion summary
 - **v3.1 case learning:** `case_analyzer.analyze()` is dispatched from `skills/research/SKILL.md:Stage 10d` and wires `pattern_detection.py` (heuristics), `accumulator.py` (candidates), `learned_patterns.py` (graduated), and `score_updates.py` (W/L scoring)
 - **v3.1 semantic merge:** `agents/case-analyzer.md` is dispatched optionally from `analyze()` for semantic merge; its prompt shape is pinned by `tests/test_case_analyzer_contract.py`
-- **v3.1 vault state:** `accumulator.json` (candidates) and `learned_patterns.md` (graduated) both live at `{vault}/.research-workflow/`; `state.acquire_state_lock` serializes Stage 10d/10e writes so concurrent /research runs can't race
+- **v3.1 vault state:** `accumulator.json` (candidates) and `learned_patterns.md` (graduated) both live at `{vault}/.researcher/`; `state.acquire_state_lock` serializes Stage 10d/10e writes so concurrent /research runs can't race

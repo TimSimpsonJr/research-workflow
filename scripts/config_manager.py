@@ -2,13 +2,13 @@
 config_manager.py — JSON-based vault configuration.
 
 Replaces the old config.py + .env pattern. Config lives in the vault
-at {vault}/.research-workflow/config.json. No API keys required.
+at {vault}/.researcher/config.json. No API keys required.
 """
 
 import json
 from pathlib import Path
 
-CONFIG_DIR_NAME = ".research-workflow"
+CONFIG_DIR_NAME = ".researcher"
 CONFIG_FILE_NAME = "config.json"
 
 
@@ -32,7 +32,7 @@ def default_config(vault_root: str) -> dict:
         # When true AND the `librarian` plugin is installed, Stage 7 delegates
         # note-writing to Librarian's writer instead of the inline write path.
         # Default false: behavior is unchanged and identical to pre-Librarian
-        # research-workflow. A config missing this key is treated as false.
+        # researcher. A config missing this key is treated as false.
         "use_librarian": False,
     }
 
@@ -50,7 +50,7 @@ def load_config(vault_root: Path) -> dict | None:
 
 
 def save_config(vault_root: Path, config: dict) -> None:
-    """Save config to vault. Creates .research-workflow/ if needed."""
+    """Save config to vault. Creates .researcher/ if needed."""
     path = _config_path(vault_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")

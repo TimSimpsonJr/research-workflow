@@ -7,7 +7,7 @@ from pathlib import Path
 
 def test_load_config_reads_json(tmp_path):
     from config_manager import load_config
-    config_dir = tmp_path / ".research-workflow"
+    config_dir = tmp_path / ".researcher"
     config_dir.mkdir()
     config_file = config_dir / "config.json"
     config_file.write_text(json.dumps({
@@ -30,7 +30,7 @@ def test_save_config_creates_directory(tmp_path):
     from config_manager import save_config
     cfg = {"vault_root": str(tmp_path), "inbox": "Inbox", "tier": "base"}
     save_config(tmp_path, cfg)
-    config_file = tmp_path / ".research-workflow" / "config.json"
+    config_file = tmp_path / ".researcher" / "config.json"
     assert config_file.exists()
     loaded = json.loads(config_file.read_text())
     assert loaded["tier"] == "base"
@@ -58,7 +58,7 @@ def test_default_config_has_required_fields():
 def test_get_state_dir_creates_if_missing(tmp_path):
     from config_manager import get_state_dir
     state_dir = get_state_dir(tmp_path)
-    assert state_dir == tmp_path / ".research-workflow" / "state"
+    assert state_dir == tmp_path / ".researcher" / "state"
     assert state_dir.exists()
 
 

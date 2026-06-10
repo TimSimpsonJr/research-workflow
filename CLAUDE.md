@@ -2,21 +2,21 @@
 
 ## What this is
 
-A Claude Code plugin for deep research into Obsidian vaults. The `/research` skill is the main entry point — it orchestrates a multi-hop pipeline with depth profiles, confidence-based replanning, and source credibility tiering. Stages: triage, resolve, hop loop (search/fetch/media/summarize/hop-planner per hop), quality gate, classify, write, wikilink scan, discover threads, complete. Three modes: single topic, batch, and thread-pull. Three planning strategies: planning_only (clear queries), intent_planning (ambiguous), unified (batch / full plan presentation).
+A Claude Code plugin for deep research into Obsidian vaults. The `/researcher` skill is the main entry point — it orchestrates a multi-hop pipeline with depth profiles, confidence-based replanning, and source credibility tiering. Stages: triage, resolve, hop loop (search/fetch/media/summarize/hop-planner per hop), quality gate, classify, write, wikilink scan, discover threads, complete. Three modes: single topic, batch, and thread-pull. Three planning strategies: planning_only (clear queries), intent_planning (ambiguous), unified (batch / full plan presentation).
 
 ## Architecture
 
 - **Plugin** (`plugin.json`): Declares skills and agents for Claude Code discovery. No direct Claude API calls — everything goes through Claude Code's Task tool and Bash.
-- **Skills** (`skills/`): Claude Code skill definitions (Markdown). The orchestrator (`research`) dispatches Haiku subagents defined in `agents/`. The setup wizard (`research-setup`) handles first-run configuration.
+- **Skills** (`skills/`): Claude Code skill definitions (Markdown). The orchestrator (`researcher`) dispatches Haiku subagents defined in `agents/`. The setup wizard (`researcher-setup`) handles first-run configuration.
 - **Agents** (`agents/`): Subagent definitions read by the research skill at runtime and passed as prompts via the Task tool. Six agents: topic-resolver (Sonnet), hop-planner (Sonnet), search-agent (Haiku), classify-agent (Haiku), thread-discoverer (Haiku), wikilink-scanner (Haiku). Sonnet handles reasoning-heavy stages (intent parsing, between-hop decisions); Haiku handles parallel-friendly stages (search, classify, summarize fallback, discover, wikilink scan).
 - **Scripts** (`scripts/`): Python tools for I/O, caching, extraction, and pure-Python math. No Claude API calls. `confidence.py` is the pure-Python formula library (depth profiles, confidence/contradiction scoring) shared by the hop-planner agent and `state.py`.
-- **Config** (`config_manager.py`): JSON-based vault config stored at `{vault}/.research-workflow/config.json`. Replaces the old `config.py` + `.env` pattern.
+- **Config** (`config_manager.py`): JSON-based vault config stored at `{vault}/.researcher/config.json`. Replaces the old `config.py` + `.env` pattern.
 - **State** (`state.py`): Pipeline checkpoints with crash recovery. The skill checkpoints after every stage and can resume from the last completed stage.
 - **Prompts** (`scripts/prompts/`): Text templates for summarization and synthesis. See `scripts/prompts/README.md` for the assembly pattern.
 
 ## Pattern Learning (v3.1.0)
 
-After each run, Stage 10d's case analyzer scans recent case records for recurring heuristic signals (source-tier dominance, hop-pattern dominance, query-template recurrence) and accumulates candidate patterns at `{vault}/.research-workflow/accumulator.json`. Candidates earn promotion to `{vault}/.research-workflow/learned_patterns.md` after 3 observations (5 under a raised bar following demotion). Promoted patterns get injected into search-agent, hop-planner, and classify-agent prompts at Stages 4a/4e/6, biasing future runs toward what's worked before. W/L scoring runs end-of-run; patterns with W/(W+L) < 0.4 over >=5 uses are demoted. Two demotions -> permanent rejection. State writes are serialized via `state.acquire_state_lock` so concurrent /research runs can't race on the two vault files.
+After each run, Stage 10d's case analyzer scans recent case records for recurring heuristic signals (source-tier dominance, hop-pattern dominance, query-template recurrence) and accumulates candidate patterns at `{vault}/.researcher/accumulator.json`. Candidates earn promotion to `{vault}/.researcher/learned_patterns.md` after 3 observations (5 under a raised bar following demotion). Promoted patterns get injected into search-agent, hop-planner, and classify-agent prompts at Stages 4a/4e/6, biasing future runs toward what's worked before. W/L scoring runs end-of-run; patterns with W/(W+L) < 0.4 over >=5 uses are demoted. Two demotions -> permanent rejection. State writes are serialized via `state.acquire_state_lock` so concurrent /researcher runs can't race on the two vault files.
 
 ## Infrastructure tiers
 
@@ -36,7 +36,7 @@ After each run, Stage 10d's case analyzer scans recent case records for recurrin
 ## Working on this project
 
 - Tests: `pytest tests/ -v` — all tests run offline (no API key needed)
-- Config is generated per-vault by `research-setup` and stored in `{vault}/.research-workflow/config.json`
+- Config is generated per-vault by `researcher-setup` and stored in `{vault}/.researcher/config.json`
 - Skills reference `{{VAULT_ROOT}}` and `{{REPO_ROOT}}` placeholders filled during plugin setup
 - The `.claude/` and `docs/` directories are gitignored (force-add specific docs files when needed)
 

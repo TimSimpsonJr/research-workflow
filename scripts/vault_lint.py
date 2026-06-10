@@ -85,7 +85,7 @@ def main():
 
     cfg = load_config(args.vault)
     if cfg is None:
-        console.print(f"[red]Error:[/red] No research-workflow config found under {args.vault}. "
+        console.print(f"[red]Error:[/red] No researcher config found under {args.vault}. "
                       f"Run /research-setup first, or pass --vault PATH.")
         sys.exit(1)
 

@@ -38,7 +38,7 @@ You will receive a `summaries` JSON object with this structure:
 
 Additional context:
 - `vault_root` -- absolute path to the Obsidian vault
-- `scripts_dir` -- absolute path to the research-workflow scripts directory
+- `scripts_dir` -- absolute path to the researcher scripts directory
 - `shared_context_files` -- vault-relative paths to notes the user flagged as context
 
 ---

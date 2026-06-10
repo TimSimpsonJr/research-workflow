@@ -84,16 +84,16 @@ def test_list_all_notes(tmp_path):
     assert len(notes) == 3
 
 
-def test_index_skips_research_workflow_dir(tmp_path):
+def test_index_skips_researcher_dir(tmp_path):
     from vault_index import build_index, list_notes
     _create_note(tmp_path, "real-note.md", "Keep me")
-    _create_note(tmp_path, ".research-workflow/config.json", '{"test": true}')
-    _create_note(tmp_path, ".research-workflow/state/run.json", '{}')
+    _create_note(tmp_path, ".researcher/config.json", '{"test": true}')
+    _create_note(tmp_path, ".researcher/state/run.json", '{}')
     build_index(tmp_path)
     notes = list_notes(tmp_path)
     paths = [n["path"] for n in notes]
     assert any("real-note" in p for p in paths)
-    assert not any(".research-workflow" in p for p in paths)
+    assert not any(".researcher" in p for p in paths)
 
 
 def test_note_exists_by_title(tmp_path):

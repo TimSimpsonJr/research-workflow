@@ -26,7 +26,7 @@ You parse natural language research prompts into a structured execution plan. Yo
 You will receive:
 - `prompt` -- the user's natural language research request
 - `vault_root` -- absolute path to the Obsidian vault
-- `scripts_dir` -- absolute path to the research-workflow scripts directory
+- `scripts_dir` -- absolute path to the researcher scripts directory
 
 ---
 

@@ -28,7 +28,7 @@ You will receive:
   - `key_claims` -- notable factual assertions
 - `written_notes` -- list of notes that were written in this batch (paths and titles)
 - `vault_root` -- absolute path to the Obsidian vault
-- `scripts_dir` -- absolute path to the research-workflow scripts directory
+- `scripts_dir` -- absolute path to the researcher scripts directory
 
 ---
 

@@ -66,8 +66,8 @@ def test_vault_lint_rejects_sibling_folder(tmp_path, capsys):
     sibling = tmp_path / "vault2"
     vault.mkdir()
     sibling.mkdir()
-    (vault / ".research-workflow").mkdir()
-    (vault / ".research-workflow" / "config.json").write_text(
+    (vault / ".researcher").mkdir()
+    (vault / ".researcher" / "config.json").write_text(
         '{"vault_root": "' + str(vault).replace("\\", "/") + '", '
         '"frontmatter_fields": ["title"], "assets": "assets"}'
     )

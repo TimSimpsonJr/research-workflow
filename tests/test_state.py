@@ -604,7 +604,7 @@ def test_write_case_record(tmp_path):
         "domain_tags": ["test"],
         "outcomes": {"sources_processed": 5},
     }
-    # cases_dir is .research-workflow/cases under the vault root
+    # cases_dir is .researcher/cases under the vault root
     cases_dir = tmp_path / "cases"
     write_case_record(cases_dir, case_data)
 

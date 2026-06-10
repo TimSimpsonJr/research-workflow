@@ -139,7 +139,7 @@ def test_migrate_env_to_config_saves_json(tmp_path):
     env_file = tmp_path / ".env"
     env_file.write_text("VAULT_PATH=" + str(tmp_path) + "\n")
     migrate_env_to_config(tmp_path, env_path=env_file)
-    config_file = tmp_path / ".research-workflow" / "config.json"
+    config_file = tmp_path / ".researcher" / "config.json"
     assert config_file.exists()
     data = json.loads(config_file.read_text())
     assert data["vault_root"] == str(tmp_path)
@@ -163,7 +163,7 @@ def test_migrate_env_to_config_dry_run(tmp_path):
     # Config dict should be returned
     assert config["vault_root"] == str(tmp_path)
     # But no file should have been written
-    config_file = tmp_path / ".research-workflow" / "config.json"
+    config_file = tmp_path / ".researcher" / "config.json"
     assert not config_file.exists()
 
 

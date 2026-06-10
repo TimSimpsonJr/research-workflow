@@ -531,7 +531,7 @@ config = {
 }
 
 save_config(Path(r'VAULT_ROOT'), config)
-print('Config saved to VAULT_ROOT/.research-workflow/config.json')
+print('Config saved to VAULT_ROOT/.researcher/config.json')
 print(json.dumps(config, indent=2))
 "
 ```
@@ -673,7 +673,7 @@ Vault conventions:
   - MOC pattern: {moc_pattern}
   - Notes indexed: {count}
 
-Config saved to: {vault_root}/.research-workflow/config.json
+Config saved to: {vault_root}/.researcher/config.json
 Vault rules saved to: {scripts_dir}/scripts/prompts/vault_rules.txt
 
 Next steps:
