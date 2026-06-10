@@ -34,6 +34,10 @@ def default_config(vault_root: str) -> dict:
         # Default false: behavior is unchanged and identical to pre-Librarian
         # researcher. A config missing this key is treated as false.
         "use_librarian": False,
+        # Topic-count threshold for the batch fan-out: a web_research batch with
+        # MORE than this many topics routes to the research-batch workflow
+        # (parallel, auto-queued); at or below it stays on the inline path.
+        "batch_threshold": 10,
     }
 
 
