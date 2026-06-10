@@ -19,15 +19,20 @@ const WF = join(ROOT, '.claude', 'workflows', 'research-batch.js');
 const stripExports = (s) =>
   s.replace(/^export\s+(?=(async\s+)?(const|let|var|function|class)\b)/gm, '').trimEnd();
 
+// Normalize CRLF -> LF. git autocrlf hands us CRLF working copies on Windows,
+// and the marker regex below matches `>>>\n`, so without this the markers are
+// never found (the real C:\ line endings have `>>>\r\n`). We process + emit LF.
+const norm = (s) => s.replace(/\r\n/g, '\n');
+
 function replaceBlock(src, libName, libText) {
   const re = new RegExp(
     `(// >>> BEGIN inlined lib/${libName}[^\\n]*>>>\\n)[\\s\\S]*?(\\n// <<< END inlined lib/${libName} <<<)`,
   );
   if (!re.test(src)) throw new Error(`markers for lib/${libName} not found in ${WF}`);
-  return src.replace(re, `$1${stripExports(libText)}$2`);
+  return src.replace(re, `$1${norm(stripExports(libText))}$2`);
 }
 
-let src = readFileSync(WF, 'utf8');
+let src = norm(readFileSync(WF, 'utf8'));
 src = replaceBlock(src, 'confidence.js', readFileSync(join(ROOT, 'lib', 'confidence.js'), 'utf8'));
 src = replaceBlock(src, 'schemas.js', readFileSync(join(ROOT, 'lib', 'schemas.js'), 'utf8'));
 writeFileSync(WF, src, 'utf8');
