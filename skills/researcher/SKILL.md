@@ -1660,6 +1660,90 @@ If the user aborts (Ctrl+C, dismisses, walks away), do nothing. The `promotion_p
 
 ---
 
+## Stage 4B: Batch Fan-Out (large web_research batches)
+
+> Reached **only** from Stage 3.5 when the batch routing conditions hold (N > `batch_threshold`, every topic `web_research`, `librarian` available). This **replaces Stages 4–10** for the run: the per-topic hop loop + write span execute inside the `research-batch` Workflow. This stage owns the cost-estimate approval, the dispatch, and the thread-selection gate. Do not run Stages 4–10 on this path.
+
+### 4B.1 Up-front cost estimate + approval
+
+Render an honest estimate from the approved plan. Per-topic agent cost scales with depth (search + fetch-summarize per hop, plus a hop-planner per `continue`):
+
+| depth | max hops | ~agents/topic |
+|-------|----------|---------------|
+| quick | 1 | ~2 |
+| standard | 3 | ~5–7 |
+| deep | 4 | ~7–10 |
+| exhaustive | 5 | ~9–12 |
+
+Compute:
+- `est_agents` = Σ per-depth estimate over topics, + 2 (Librarian classify + write) + 1 (thread-discoverer).
+- `est_tokens` ≈ `est_agents × ~50K` (rough per-agent average — the comparable Dossier capstone averaged ~52K/agent).
+- `est_minutes` ≈ scaled by `est_agents` and the concurrency cap (~12 parallel).
+- `est_cost` from the resolver's `estimated_usage` when present, else from `est_tokens`.
+
+Present and gate (this is the up-front approval; the batch then runs unattended):
+```
+Large batch: {N} topics ({depth breakdown}). Routing to the parallel batch fan-out.
+Estimated: ~{est_agents} agents · ~{est_tokens/1000}K tokens · ~{est_minutes} min · ~${est_cost}
+Runs unattended — no mid-run gates; low-confidence topics auto-replan up to 2x then are flagged (not gated).
+
+Proceed? [yes / no / switch to inline]
+```
+- **yes** → 4B.2.
+- **no** → stop.
+- **switch to inline** → fall back to Stage 4 (the inline path) for this batch.
+
+### 4B.2 Dispatch the workflow
+
+Determine the full Python path (the batch's `fetch-summarize-runner` needs it — nothing is on PATH):
+```bash
+python -c "import sys; print(sys.executable)"
+```
+Create the scratch dir `STATE_DIR/batch_scratch` (the runner writes intermediates under unique per-topic-hop subdirs). Build a compact `vaultDigest` of `{title, tags, path}` from the vault index (cap ~1500 most-recent) for novelty resolution.
+
+Record a lightweight **approve** run marker in `STATE_DIR`. Then call the **Workflow tool** (the skill instruction is your opt-in to use it):
+```
+Workflow({
+  name: 'research-batch',
+  args: {
+    plan: <approved resolver plan: project + topics[{topic, mode, depth}]>,
+    config: {
+      vault_root: VAULT, scripts_dir: SCRIPTS, python_path: <sys.executable>,
+      ollama_model: RECOMMENDED_MODEL,   // null at base tier
+      tier: TIER, work_dir: "STATE_DIR/batch_scratch",
+      outputMode: "vault", vaultDigest: <digest>
+    },
+    runId: RUN_ID
+  }
+})
+```
+The workflow's agents draw from the turn's **shared budget pool**, so a `+Nk`/budget directive caps the whole batch. It runs in the background; you are notified on completion.
+
+### 4B.3 Thread-selection gate
+
+The result is `{written_notes, updated_notes, threads, summary}`. If `summary.aborted` / `aborted:true`, report `reason` and stop. Otherwise:
+```
+Batch complete: {notes_written} written, {notes_updated} updated{, {N} low-confidence flagged}.
+Follow-up threads:
+  1. {topic} (score {score}, {novelty_status}) — {rationale}
+  ...
+Run a follow-up batch on selected threads? [numbers / all / none]
+```
+- **numbers / all** → build a fresh plan from the selected threads (`mode: web_research`; `suggested_priority` → `depth`) and **re-dispatch from 4B.1** (a new cost estimate + approval each round — the don't-compound backstop against runaway escalation).
+- **none** → 4B.4.
+
+### 4B.4 Completion summary
+
+Record the **complete** run marker. Present:
+```
+{project}: {notes_written} written, {notes_updated} updated, {threads_found} threads.
+{low-confidence topics flagged, if any} · {failures, if any}
+Notes are in the vault.
+```
+Done. (Stages 4–10 are the inline alternative and are not run on this path.)
+
+---
+
 ## Error Handling
 
 Throughout the pipeline, follow these principles:
