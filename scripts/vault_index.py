@@ -10,7 +10,7 @@ import re
 import sqlite3
 from pathlib import Path
 
-CONFIG_DIR = ".research-workflow"
+CONFIG_DIR = ".researcher"
 DB_NAME = "vault_index.db"
 EXCERPT_LENGTH = 500
 
@@ -102,7 +102,7 @@ def _index_file(conn: sqlite3.Connection, vault_root: Path, rel_path: str, mtime
 
 
 def _should_skip(rel_path: str) -> bool:
-    """Skip hidden dirs, .research-workflow, and non-.md files."""
+    """Skip hidden dirs, .researcher, and non-.md files."""
     parts = Path(rel_path).parts
     for part in parts:
         if part.startswith("."):

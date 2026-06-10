@@ -1,5 +1,5 @@
 # tests/test_skill_contract.py
-"""Contract tests for skills/research/SKILL.md.
+"""Contract tests for skills/researcher/SKILL.md.
 
 SKILL.md is interpreted by the orchestrator at runtime as instructions for
 how to assemble bash snippets and gate stage transitions. The Python code in
@@ -17,7 +17,7 @@ case-based pattern learning:
 from pathlib import Path
 
 
-_SKILL_MD = Path(__file__).parent.parent / "skills" / "research" / "SKILL.md"
+_SKILL_MD = Path(__file__).parent.parent / "skills" / "researcher" / "SKILL.md"
 
 
 def test_skill_md_stage_10c_includes_applied_patterns_in_case_dict():

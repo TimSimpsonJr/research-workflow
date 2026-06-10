@@ -1,12 +1,12 @@
 {
-  "name": "research-workflow",
+  "name": "researcher",
   "description": "Deep research pipeline for Obsidian vaults. Batch research, thread-pulling, media capture, vault-aware classification.",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "dependencies": ["librarian"],
   "author": {
     "name": "Tim Simpson"
   },
-  "repository": "https://github.com/TimSimpsonJr/research-workflow",
+  "repository": "https://github.com/TimSimpsonJr/researcher",
   "license": "MIT",
   "keywords": [
     "research",

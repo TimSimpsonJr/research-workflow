@@ -1,11 +1,11 @@
 {
-  "name": "research-workflow",
+  "name": "researcher",
   "owner": {
     "name": "Tim Simpson"
   },
   "plugins": [
     {
-      "name": "research-workflow",
+      "name": "researcher",
       "description": "Deep research pipeline for Obsidian vaults. Batch research, thread-pulling, media capture, vault-aware classification.",
       "source": "./"
     }

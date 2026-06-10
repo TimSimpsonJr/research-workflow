@@ -1,6 +1,6 @@
 ---
-name: research
-description: 'Deep research pipeline for Obsidian vaults. Usage: /research "topic or natural language prompt". Supports batch research, thread-pulling from vault notes, local file ingestion, and multi-hop investigation with confidence-based replanning.'
+name: researcher
+description: 'Deep research pipeline for Obsidian vaults. Usage: /researcher "topic or natural language prompt". Supports batch research, thread-pulling from vault notes, local file ingestion, and multi-hop investigation with confidence-based replanning.'
 ---
 
 # Research -- v3 Orchestrator (Multi-Hop Pipeline)
@@ -12,8 +12,8 @@ You are the orchestrator. You run a stateful multi-stage research pipeline that 
 - `VAULT` = `{{VAULT_ROOT}}`
 - `REPO` = `{{REPO_ROOT}}`
 - `SCRIPTS` = `REPO/scripts`
-- `STATE_DIR` = `VAULT/.research-workflow/state`
-- `CASES_DIR` = `VAULT/.research-workflow/cases`
+- `STATE_DIR` = `VAULT/.researcher/state`
+- `CASES_DIR` = `VAULT/.researcher/cases`
 
 ---
 
@@ -21,7 +21,23 @@ You are the orchestrator. You run a stateful multi-stage research pipeline that 
 
 ### 0a. Load config
 
-Run via Bash:
+First, migrate any existing vault state from the pre-rename directory name
+(`.research-workflow/` -> `.researcher/`). This is one-time and idempotent -- a
+no-op for new vaults or vaults already migrated. Run via Bash:
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from migrate import migrate_vault_dir
+from pathlib import Path
+print(migrate_vault_dir(Path('VAULT')))
+"
+```
+This prints `migrated`, `noop`, or `conflict`. If it prints `conflict`, warn the
+user that both `.research-workflow/` and `.researcher/` exist under the vault and
+a manual merge is needed, then continue (config loads from `.researcher/`).
+
+Then load config. Run via Bash:
 ```bash
 python -c "
 import sys, json
@@ -30,7 +46,7 @@ from config_manager import load_config
 from pathlib import Path
 cfg = load_config(Path('VAULT'))
 if cfg is None:
-    print('ERROR: No config found. Run /research-setup first.')
+    print('ERROR: No config found. Run /researcher-setup first.')
     sys.exit(1)
 print(json.dumps(cfg))
 "
@@ -86,7 +102,7 @@ Continue at {TIER} tier? [yes / fix and retry / cancel]
 
 Wait for user response:
 - **yes:** Continue with the degraded tier.
-- **fix and retry:** Stop the pipeline. The user will fix the issue and re-run `/research`.
+- **fix and retry:** Stop the pipeline. The user will fix the issue and re-run `/researcher`.
 - **cancel:** Stop the pipeline entirely.
 
 If SearXNG was auto-started (check `report.components.searxng.auto_started`), log:
@@ -150,7 +166,7 @@ Use the user's response:
 - **Restart:** Run `python -c "from state import abandon_run; abandon_run(Path('STATE_DIR'))"` via Bash, then proceed to Stage 2.
 - **Abandon:** Run the same abandon command and stop.
 
-If `state.load_run()` returned None and the user just ran /research (no other reason for that), it may be that an old-schema (v2) run was abandoned silently. Stage 0's config load already printed the migration message -- no further action needed.
+If `state.load_run()` returned None and the user just ran /researcher (no other reason for that), it may be that an old-schema (v2) run was abandoned silently. Stage 0's config load already printed the migration message -- no further action needed.
 
 ---
 
@@ -287,7 +303,7 @@ Note: strategy persistence now happens once in Stage 2c (immediately after the r
 
 ### 2f. Load learned patterns (v3.1.0)
 
-**When to run:** Once per /research invocation, after Stage 2 has selected a strategy and Stage 3 has produced the resolved topics list. Every path through Stage 2 (planning_only via 2e, intent_planning via 2d->2e, unified via Stage 3) must run Stage 2f BEFORE entering Stage 4 -- Stage 4a/4e and Stage 6 rely on `LEARNED_BY_STAGE` being populated by 2f. If you got here from 2e's `yes` branch, run 2f next, then enter Stage 4. If you got here from Stage 3b, run 2f, then enter Stage 4.
+**When to run:** Once per /researcher invocation, after Stage 2 has selected a strategy and Stage 3 has produced the resolved topics list. Every path through Stage 2 (planning_only via 2e, intent_planning via 2d->2e, unified via Stage 3) must run Stage 2f BEFORE entering Stage 4 -- Stage 4a/4e and Stage 6 rely on `LEARNED_BY_STAGE` being populated by 2f. If you got here from 2e's `yes` branch, run 2f next, then enter Stage 4. If you got here from Stage 3b, run 2f, then enter Stage 4.
 
 Run via Bash:
 
@@ -304,7 +320,7 @@ print(json.dumps({stage: [p.id for p in patterns] for stage, patterns in grouped
 "
 ```
 
-Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`. Substitute `TOPIC_STRINGS` with the list of topic strings from the resolver output (Stage 3's `final['topics']` -- use each topic's `topic` field).
+Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.researcher/learned_patterns.md`. Substitute `TOPIC_STRINGS` with the list of topic strings from the resolver output (Stage 3's `final['topics']` -- use each topic's `topic` field).
 
 **Why topic-text matching, not `domain_tags` matching at this stage:** v3.0.0 only derives `domain_tags` at case-write time (Stage 10c), computed from tags assigned to written notes. At Stage 2 no notes exist yet. Topic strings are the strongest signal we have for relevance. Stage 10d's analyzer uses real `domain_tags` from the just-written case via `filter_relevant`.
 
@@ -467,7 +483,7 @@ print(json.dumps(out))
 "
 ```
 
-Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md` and pass `LEARNED_IDS_FOR_STAGE` as the list `LEARNED_BY_STAGE["search"]`.
+Substitute `LEARNED_PATTERNS_PATH` with `{VAULT}/.researcher/learned_patterns.md` and pass `LEARNED_IDS_FOR_STAGE` as the list `LEARNED_BY_STAGE["search"]`.
 
 Build a `## Learned Patterns` block from the returned records (4-space indented to show the literal markdown the orchestrator emits):
 
@@ -562,7 +578,7 @@ summaries_so_far: {path to all summaries this topic has collected across all hop
 sources_so_far: {path to all sources this topic has collected}
 hop_genealogy: {topic.hop_genealogy as JSON}
 seen_urls: {topic.seen_urls}
-vault_index_path: {VAULT}/.research-workflow/vault_index.db
+vault_index_path: {VAULT}/.researcher/vault_index.db
 scripts_dir: SCRIPTS
 ```
 
@@ -881,14 +897,14 @@ This is the core stage. **You (the Sonnet orchestrator) write the notes.** For s
 
 ### 7.0 OPTIONAL — Delegate the write to the Librarian plugin (feature-flagged, default OFF)
 
-> **This is a "prove the call path" shim, not a full migration.** It demonstrates that research-workflow *can* hand its note-writing to the standalone Librarian plugin behind a feature flag. The full migration (retiring the inline write path below) is a deliberate fast-follow and is NOT done here. By default this block does nothing and Stage 7 runs exactly as it always has.
+> **This is a "prove the call path" shim, not a full migration.** It demonstrates that researcher *can* hand its note-writing to the standalone Librarian plugin behind a feature flag. The full migration (retiring the inline write path below) is a deliberate fast-follow and is NOT done here. By default this block does nothing and Stage 7 runs exactly as it always has.
 
 **Gate.** Take the Librarian path ONLY if BOTH conditions hold:
 
 1. `config.use_librarian` is `true` (from Stage 0's loaded config; a config missing this key counts as `false`), AND
 2. the `librarian` plugin is actually available in this session (its `librarian` skill / `scripts/write_note.py` writer is installed and invokable).
 
-If EITHER condition is false — which is the **default** — skip this entire subsection and proceed to **7a** below. The inline write path (7a–7d) is the unchanged, canonical behavior; nothing about it is modified by this shim, so a run with the flag off is byte-for-byte identical to research-workflow before Librarian existed.
+If EITHER condition is false — which is the **default** — skip this entire subsection and proceed to **7a** below. The inline write path (7a–7d) is the unchanged, canonical behavior; nothing about it is modified by this shim, so a run with the flag off is byte-for-byte identical to researcher before Librarian existed.
 
 **If the gate passes**, do the following instead of 7a–7d:
 
@@ -896,11 +912,11 @@ If EITHER condition is false — which is the **default** — skip this entire s
 
    `[{title, content, frontmatter_meta, citations, link_hints, priority, action}]`
 
-   plus an optional top-level `vault_context` (pass research-workflow's `classification.vault_context` through unchanged so Librarian can resolve placement and existing-note context).
+   plus an optional top-level `vault_context` (pass researcher's `classification.vault_context` through unchanged so Librarian can resolve placement and existing-note context).
 
-   Field mapping, research-workflow note spec → Librarian neutral contract:
+   Field mapping, researcher note spec → Librarian neutral contract:
 
-   | research-workflow note spec field         | Librarian contract field | notes |
+   | researcher note spec field         | Librarian contract field | notes |
    |-------------------------------------------|--------------------------|-------|
    | `title`                                   | `title`                  | direct pass-through |
    | the authored note body (composed per 7c.v, using `content_summary` as the writing guide) | `content` | **you still author the body here**, applying the same frontmatter/callout/wikilink/sources rules from 7c.v; `content` is the finished Markdown body. `content_summary` is *guidance*, not the body — expand it into full prose as today. |
@@ -911,13 +927,13 @@ If EITHER condition is false — which is the **default** — skip this entire s
    | `action`                                  | `action`                 | pass-through (`create` / `update`) |
 
    **Dropped fields (do NOT forward):**
-   - `write_model` — research-workflow's own model-routing concern; Librarian does not consume it.
+   - `write_model` — researcher's own model-routing concern; Librarian does not consume it.
    - `media` — dead v2 field (empty by design in v3; see 7c.v "Media embeds"). Source-inlined `![[path]]` embeds already live inside the `content` body, so they travel with `content`.
    - `filename` / `folder` — Librarian *derives* placement itself; do not pin it.
 
 2. **Delegate the write.** Hand the assembled spec list (plus `vault_context`) to the Librarian plugin's writer via the `librarian` skill. Librarian performs its own classify → write → wikilink for each spec and writes the notes to the vault.
 
-3. **Reconcile.** After Librarian returns the written-note paths, still run research-workflow's own bookkeeping so the rest of the pipeline is unaffected: record each written note via `append_written_note` (7c.vii), update progress via `update_stage('write', ...)` (7c.viii), and apply the MOC updates in **7d**. Then skip to Stage 8.
+3. **Reconcile.** After Librarian returns the written-note paths, still run researcher's own bookkeeping so the rest of the pipeline is unaffected: record each written note via `append_written_note` (7c.vii), update progress via `update_stage('write', ...)` (7c.viii), and apply the MOC updates in **7d**. Then skip to Stage 8.
 
 If the Librarian writer errors or is unexpectedly unavailable after the gate passed, fall back to the inline path (7a–7d) so the run still completes.
 
@@ -1267,7 +1283,7 @@ Wait for user response:
 - **all:** Save all threads as the next batch input.
 - **specific numbers:** Save only the selected threads.
 
-If threads are approved, save them to `STATE_DIR/approved_threads.json` for a follow-up `/research` invocation. Do NOT start a new pipeline run within this run.
+If threads are approved, save them to `STATE_DIR/approved_threads.json` for a follow-up `/researcher` invocation. Do NOT start a new pipeline run within this run.
 
 ---
 
@@ -1332,7 +1348,7 @@ Estimated cost: ${estimated_cost:.2f}
 {if threads approved:}
 Threads queued for follow-up:
   - {topic} (priority: {priority})
-  Run /research again to execute these.
+  Run /researcher again to execute these.
 {end}
 
 Tier: {TIER} | Sources fetched: {total} | Notes written: {count} | Replans: {replan_count}
@@ -1423,7 +1439,7 @@ print(json.dumps({
 "
 ```
 
-Substitute `STATE_ROOT_FOR_VAULT` with `{VAULT}/.research-workflow/`, `CASE_PATH` with the path to the just-written case JSON (under `{VAULT}/.research-workflow/cases/`), `ACCUMULATOR_PATH` with `{VAULT}/.research-workflow/accumulator.json`, `LEARNED_PATTERNS_PATH` with `{VAULT}/.research-workflow/learned_patterns.md`, and `CASES_DIR` with `{VAULT}/.research-workflow/cases/`.
+Substitute `STATE_ROOT_FOR_VAULT` with `{VAULT}/.researcher/`, `CASE_PATH` with the path to the just-written case JSON (under `{VAULT}/.researcher/cases/`), `ACCUMULATOR_PATH` with `{VAULT}/.researcher/accumulator.json`, `LEARNED_PATTERNS_PATH` with `{VAULT}/.researcher/learned_patterns.md`, and `CASES_DIR` with `{VAULT}/.researcher/cases/`.
 
 Parse the JSON output.
 
@@ -1444,11 +1460,11 @@ WARNING: v3.1.0 pattern learning state was not updated this run:
   {warning text(s) from analyzer}
 
 To reset the affected store, delete the file manually:
-  {VAULT}/.research-workflow/accumulator.json
-  {VAULT}/.research-workflow/learned_patterns.md
-The next /research run will start with an empty store and rebuild from
+  {VAULT}/.researcher/accumulator.json
+  {VAULT}/.researcher/learned_patterns.md
+The next /researcher run will start with an empty store and rebuild from
 new cases going forward. Existing case history at
-{VAULT}/.research-workflow/cases/ is unaffected.
+{VAULT}/.researcher/cases/ is unaffected.
 ```
 
 (There is no in-pipeline rebuild flow in v3.1.0. Corrupt-state recovery is rare; the simpler "user deletes file -> fresh start" path was preferred over carrying the complexity of a rebuild-from-history mechanism. Revisit in v3.1.x if real usage shows this is too coarse.)
@@ -1495,7 +1511,7 @@ Promote / Reject / Hold?
 
 Use the user's response:
 
-All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10d uses -- without it, concurrent `/research` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
+All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10d uses -- without it, concurrent `/researcher` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.researcher/`.
 
 **Precondition for all three branches:** Stage 10d already verified that BOTH `learned_patterns.md` AND `accumulator.json` are parseable (no `learned_patterns_*` and no `accumulator_*` warnings) BEFORE letting control reach Stage 10e. If any such warning was present, Stage 10d skipped 10e entirely. So inside each branch we can assume the loaders return a usable file -- but every branch still defends against late corruption by checking warnings before saving (`BRANCH_ABORTED` on mismatch). The Reject and Hold branches would otherwise silently overwrite a recoverable corrupt accumulator with empty content.
 

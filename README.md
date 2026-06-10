@@ -10,25 +10,25 @@ Install from the Fieldwork marketplace:
 
 ```
 /plugin marketplace add TimSimpsonJr/fieldwork-plugins
-/plugin install research-workflow@fieldwork-plugins
+/plugin install researcher@fieldwork-plugins
 ```
 
 Configure your vault:
 
 ```
-/research-setup
+/researcher-setup
 ```
 
 Start researching:
 
 ```
-/research "any topic"
+/researcher "any topic"
 ```
 
 ## Three Modes
 
-- **Single topic** — `/research "quantum computing"` researches one topic end-to-end
-- **Batch** — `/research batch topics.md` processes a list of topics from a file
+- **Single topic** — `/researcher "quantum computing"` researches one topic end-to-end
+- **Batch** — `/researcher batch topics.md` processes a list of topics from a file
 - **Thread-pull** — after a batch run, discovers follow-up leads from what you wrote and researches them automatically
 
 ## Planning Strategies
@@ -110,11 +110,11 @@ State is checkpointed after every stage. If the pipeline crashes, it resumes fro
 | **Mid**  | + Ollama                                                  | Local summarization (no API spend on summary work)                                    |
 | **Full** | + SearXNG (Docker) + Playwright + yt-dlp + Whisper        | Private search merging, JS-page rendering, YouTube extraction, audio transcription    |
 
-`/research-setup` auto-detects your tier and can auto-start the SearXNG container.
+`/researcher-setup` auto-detects your tier and can auto-start the SearXNG container.
 
 ## Cases — Foundation for Pattern Learning
 
-Each completed run writes a JSON case record to `{vault}/.research-workflow/cases/{run_id}.json` capturing the query, domain tags, strategy used, depth profile, hops executed, confidence achieved, contradiction rate, and which hop patterns worked vs. failed. v3.0.0 writes these records but does not yet read them. v3.1.0 will add the read path — the resolver will surface relevant prior cases at triage so downstream agents bias toward query formulations and hop patterns that have worked for similar topics before.
+Each completed run writes a JSON case record to `{vault}/.researcher/cases/{run_id}.json` capturing the query, domain tags, strategy used, depth profile, hops executed, confidence achieved, contradiction rate, and which hop patterns worked vs. failed. v3.0.0 writes these records but does not yet read them. v3.1.0 will add the read path — the resolver will surface relevant prior cases at triage so downstream agents bias toward query formulations and hop patterns that have worked for similar topics before.
 
 ## Project Structure
 
@@ -124,8 +124,8 @@ Each completed run writes a JSON case record to `{vault}/.research-workflow/case
   marketplace.json            Single-plugin marketplace pointer (./ source)
 
 skills/
-  research/SKILL.md           Sonnet orchestrator — 11-stage multi-hop pipeline
-  research-setup/SKILL.md     Interactive setup wizard
+  researcher/SKILL.md         Sonnet orchestrator — 11-stage multi-hop pipeline
+  researcher-setup/SKILL.md   Interactive setup wizard
 
 agents/
   topic-resolver.md           Sonnet — NL prompt → research plan, strategy + depth
@@ -136,7 +136,7 @@ agents/
   wikilink-scanner.md         Haiku — wikilink backfill into existing notes
 
 scripts/
-  config_manager.py           JSON vault config (.research-workflow/config.json)
+  config_manager.py           JSON vault config (.researcher/config.json)
   state.py                    v3 checkpoint schema, atomic transitions, case writer
   detect_tier.py              base/mid/full tier detection + SearXNG auto-start
   vault_index.py              SQLite FTS5 vault search index

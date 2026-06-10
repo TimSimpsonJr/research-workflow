@@ -3,7 +3,7 @@ state.py — Pipeline state management with crash recovery.
 
 Tracks pipeline progress via JSON checkpoints. Supports resume,
 restart, and abandon flows. State lives in the vault at
-{vault}/.research-workflow/state/.
+{vault}/.researcher/state/.
 """
 
 import json

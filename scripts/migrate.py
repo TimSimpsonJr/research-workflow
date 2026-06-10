@@ -23,6 +23,50 @@ import vault_index
 
 console = Console()
 
+# The hidden vault state dir was named ".research-workflow" before the plugin
+# was renamed to "researcher". config_manager.CONFIG_DIR_NAME is now ".researcher".
+OLD_CONFIG_DIR_NAME = ".research-workflow"
+
+
+def migrate_vault_dir(vault_root: Path, dry_run: bool = False) -> str:
+    """Migrate the hidden vault state dir from the old name to the new one.
+
+    Renames ``{vault}/.research-workflow/`` to ``{vault}/.researcher/`` (the
+    current ``config_manager.CONFIG_DIR_NAME``) so existing vaults keep their
+    config, state, cases, and learned patterns after the plugin rename. The
+    whole directory is moved atomically; contents are not inspected.
+
+    Args:
+        vault_root: Root path of the Obsidian vault.
+        dry_run: If True, report what would happen without moving anything.
+
+    Returns:
+        One of:
+          - ``"migrated"``: the old dir existed and the new did not, so it was
+            (or, under dry_run, would be) moved to the new name.
+          - ``"noop"``: the old dir is absent (already migrated or never used).
+          - ``"conflict"``: both dirs exist; left untouched so neither is
+            clobbered. A warning is printed and a manual merge is required.
+    """
+    old = vault_root / OLD_CONFIG_DIR_NAME
+    new = vault_root / config_manager.CONFIG_DIR_NAME
+
+    if not old.exists():
+        return "noop"
+
+    if new.exists():
+        console.print(
+            f"  [yellow]Both {OLD_CONFIG_DIR_NAME}/ and {config_manager.CONFIG_DIR_NAME}/ "
+            f"exist under {vault_root}; leaving both. Manual merge required.[/yellow]"
+        )
+        return "conflict"
+
+    if not dry_run:
+        shutil.move(str(old), str(new))
+    verb = "[dry-run] Would migrate" if dry_run else "Migrated"
+    console.print(f"  {verb} {OLD_CONFIG_DIR_NAME}/ -> {config_manager.CONFIG_DIR_NAME}/")
+    return "migrated"
+
 
 def rename_folder(vault_root: Path, old_name: str, new_name: str, dry_run: bool = False) -> int:
     """Rename a top-level vault folder and update all wikilinks referencing it.

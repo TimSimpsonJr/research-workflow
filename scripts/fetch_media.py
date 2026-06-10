@@ -44,7 +44,7 @@ VIDEO_DOMAINS = {"youtube.com", "www.youtube.com", "youtu.be",
 
 DEFAULT_MAX_SIZE_BYTES = 10 * 1024 * 1024  # 10 MB
 _DOWNLOAD_HEADERS = {
-    "User-Agent": "research-workflow/2.0 (media downloader; +https://github.com)",
+    "User-Agent": "researcher/2.0 (media downloader; +https://github.com)",
 }
 
 

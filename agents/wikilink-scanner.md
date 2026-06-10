@@ -23,7 +23,7 @@ You will receive:
 - `new_notes` -- list of `{path, title}` for notes created in this batch
 - `project_folder` -- vault-relative folder path containing the project
 - `vault_root` -- absolute path to the Obsidian vault
-- `scripts_dir` -- absolute path to the research-workflow scripts directory
+- `scripts_dir` -- absolute path to the researcher scripts directory
 
 ---
 
