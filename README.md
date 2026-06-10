@@ -12,13 +12,13 @@ It runs on Claude Code's own subagents (or a local model on your machine), so th
 - **Let it find the next thread.** After a batch, it reads back over what it just wrote, spots the loose ends worth chasing, and offers to research those too.
 - **Keep everything in one place.** New notes link to the notes you already have and live in your vault, not in a separate app.
 
-## Why people like it
+## What makes it useful
 
-It weighs its sources. Every source gets a credibility rating, so a peer-reviewed paper or an official dataset counts for more than an anonymous blog post. A topic keeps gathering material until it has enough, or until it reaches a sensible stopping point.
+It checks its sources. Every source gets a credibility rating, and a peer-reviewed paper or an official dataset counts for more than a random blog. The research keeps going until it has enough solid material or hits a sensible stopping point, so you're not reading notes built on one shaky link.
 
-For anything ambiguous or large, it presents the plan first, including a rough estimate of the time and tokens it will take, and waits for your approval before it runs.
+For anything ambiguous or big, it shows you the plan first: what it's about to do, and roughly what it'll cost in time and tokens. Then you say go.
 
-It adds no cost beyond what you already pay for Claude. The work runs through Claude Code, with an optional local model (Ollama) handling summarization if you have one installed.
+It costs nothing on top of what you already pay for Claude. The work happens through Claude Code, with an optional local model (Ollama) doing the summarizing if you have one.
 
 ## Quick start
 
