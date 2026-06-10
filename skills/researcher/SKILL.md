@@ -416,6 +416,49 @@ Run Stage 2f before entering Stage 4.
 
 ---
 
+## Stage 3.5: Batch Routing Decision
+
+Run this AFTER Stage 2f and BEFORE entering Stage 4. It chooses one of two
+execution paths for this run:
+
+- **Inline path (default):** Stages 4–10 below, exactly as always. This is the
+  route for single topics and normal-sized batches, and is **unchanged**.
+- **Batch fan-out path:** **Stage 4B** (a Workflow-tool orchestration that fans
+  the per-topic hop loop out in parallel and auto-queues large batches). This is
+  an accelerator for *large web-research batches only*.
+
+From the approved plan and the Stage 0 config, compute:
+- `N` = number of entries in `PLAN_JSON['topics']`.
+- `batch_threshold` = `config['batch_threshold']` (default `10` if the key is absent).
+- `all_web_research` = every topic's `mode` is `web_research` (i.e. no
+  `local_extraction` or `thread_pull` topics anywhere in the batch).
+
+**Take the BATCH FAN-OUT path (Stage 4B) only if ALL THREE hold:**
+
+1. `N > batch_threshold` — more topics than the vault's threshold, AND
+2. `all_web_research` is true — the batch is purely web-research topics, AND
+3. the `librarian` plugin is available in this session (its `librarian` skill is
+   installed and invokable). The batch write span delegates note-writing to
+   Librarian and has **no inline fallback inside the workflow**, so Librarian is
+   a hard precondition — the same availability notion as Stage 7.0's gate.
+
+If all three hold → **go to Stage 4B (Batch Fan-Out); skip Stages 4–10.**
+
+**Otherwise → continue to Stage 4 below (the inline path).** When the batch was
+*over* threshold but a condition failed, tell the user one line so the choice is
+transparent:
+
+- **Mixed modes** (over threshold, but some topics are `local_extraction` /
+  `thread_pull`):
+  > Batch has non-web topics; running the interactive pipeline instead of batch fan-out.
+- **Librarian absent** (over threshold, all `web_research`, but `librarian` not
+  installed/invokable):
+  > The librarian plugin isn't available; running the interactive pipeline. Install `librarian` (Fieldwork marketplace) to enable large-batch fan-out.
+
+When `N <= batch_threshold`, the inline path is the expected route — no note needed.
+
+---
+
 ## Stage 4: Hop Loop
 
 For each hop level from 1 to the maximum `max_hops` across all topics, run the search->fetch->media->summarize->hop-planner sequence for all topics that are still active at this level.
