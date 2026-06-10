@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "researcher",
-      "description": "Deep research pipeline for Obsidian vaults. Batch research, thread-pulling, media capture, vault-aware classification.",
+      "description": "Researches any topic, or a whole batch of them, and writes well-organized, cited notes straight into your Obsidian vault. Runs on Claude Code, with no separate API keys to set up.",
       "source": "./"
     }
   ]
