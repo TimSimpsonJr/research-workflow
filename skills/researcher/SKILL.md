@@ -21,7 +21,23 @@ You are the orchestrator. You run a stateful multi-stage research pipeline that 
 
 ### 0a. Load config
 
-Run via Bash:
+First, migrate any existing vault state from the pre-rename directory name
+(`.research-workflow/` -> `.researcher/`). This is one-time and idempotent -- a
+no-op for new vaults or vaults already migrated. Run via Bash:
+```bash
+python -c "
+import sys
+sys.path.insert(0, 'SCRIPTS')
+from migrate import migrate_vault_dir
+from pathlib import Path
+print(migrate_vault_dir(Path('VAULT')))
+"
+```
+This prints `migrated`, `noop`, or `conflict`. If it prints `conflict`, warn the
+user that both `.research-workflow/` and `.researcher/` exist under the vault and
+a manual merge is needed, then continue (config loads from `.researcher/`).
+
+Then load config. Run via Bash:
 ```bash
 python -c "
 import sys, json

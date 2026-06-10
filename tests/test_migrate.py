@@ -277,3 +277,80 @@ def test_full_migration_idempotent(tmp_path):
     # Config should still be valid
     config = migrate_env_to_config(tmp_path)
     assert config["vault_root"] == str(tmp_path)
+
+
+# --- vault-dir migration: .research-workflow -> .researcher (researcher rename) ---
+
+
+def test_migrate_vault_dir_moves_old_to_new(tmp_path):
+    from migrate import migrate_vault_dir
+
+    old = tmp_path / ".research-workflow"
+    (old / "state").mkdir(parents=True)
+    (old / "config.json").write_text('{"vault_root":"x"}')
+    (old / "cases").mkdir()
+    (old / "cases" / "run1.json").write_text("{}")
+
+    result = migrate_vault_dir(tmp_path)
+
+    assert result == "migrated"
+    assert (tmp_path / ".researcher" / "config.json").exists()
+    assert (tmp_path / ".researcher" / "state").is_dir()
+    assert (tmp_path / ".researcher" / "cases" / "run1.json").exists()
+    assert not old.exists()
+
+
+def test_migrate_vault_dir_idempotent(tmp_path):
+    from migrate import migrate_vault_dir
+
+    old = tmp_path / ".research-workflow"
+    old.mkdir()
+    (old / "config.json").write_text('{"vault_root":"x"}')
+
+    assert migrate_vault_dir(tmp_path) == "migrated"
+    # Second run: old gone, new present -> no-op, no error
+    assert migrate_vault_dir(tmp_path) == "noop"
+    assert (tmp_path / ".researcher" / "config.json").exists()
+
+
+def test_migrate_vault_dir_noop_when_neither_dir(tmp_path):
+    from migrate import migrate_vault_dir
+
+    assert migrate_vault_dir(tmp_path) == "noop"
+    assert not (tmp_path / ".researcher").exists()
+    assert not (tmp_path / ".research-workflow").exists()
+
+
+def test_migrate_vault_dir_conflict_leaves_both(tmp_path):
+    """If both old and new exist, leave both untouched (manual merge)."""
+    from migrate import migrate_vault_dir
+
+    old = tmp_path / ".research-workflow"
+    old.mkdir()
+    (old / "config.json").write_text('{"which":"old"}')
+    new = tmp_path / ".researcher"
+    new.mkdir()
+    (new / "config.json").write_text('{"which":"new"}')
+
+    result = migrate_vault_dir(tmp_path)
+
+    assert result == "conflict"
+    assert old.exists()
+    assert new.exists()
+    # Neither side clobbered
+    assert '"old"' in (old / "config.json").read_text()
+    assert '"new"' in (new / "config.json").read_text()
+
+
+def test_migrate_vault_dir_dry_run_does_not_move(tmp_path):
+    from migrate import migrate_vault_dir
+
+    old = tmp_path / ".research-workflow"
+    old.mkdir()
+    (old / "config.json").write_text("{}")
+
+    result = migrate_vault_dir(tmp_path, dry_run=True)
+
+    assert result == "migrated"
+    assert old.exists()
+    assert not (tmp_path / ".researcher").exists()
