@@ -1,6 +1,6 @@
 ---
-name: research
-description: 'Deep research pipeline for Obsidian vaults. Usage: /research "topic or natural language prompt". Supports batch research, thread-pulling from vault notes, local file ingestion, and multi-hop investigation with confidence-based replanning.'
+name: researcher
+description: 'Deep research pipeline for Obsidian vaults. Usage: /researcher "topic or natural language prompt". Supports batch research, thread-pulling from vault notes, local file ingestion, and multi-hop investigation with confidence-based replanning.'
 ---
 
 # Research -- v3 Orchestrator (Multi-Hop Pipeline)
@@ -30,7 +30,7 @@ from config_manager import load_config
 from pathlib import Path
 cfg = load_config(Path('VAULT'))
 if cfg is None:
-    print('ERROR: No config found. Run /research-setup first.')
+    print('ERROR: No config found. Run /researcher-setup first.')
     sys.exit(1)
 print(json.dumps(cfg))
 "
@@ -86,7 +86,7 @@ Continue at {TIER} tier? [yes / fix and retry / cancel]
 
 Wait for user response:
 - **yes:** Continue with the degraded tier.
-- **fix and retry:** Stop the pipeline. The user will fix the issue and re-run `/research`.
+- **fix and retry:** Stop the pipeline. The user will fix the issue and re-run `/researcher`.
 - **cancel:** Stop the pipeline entirely.
 
 If SearXNG was auto-started (check `report.components.searxng.auto_started`), log:
@@ -150,7 +150,7 @@ Use the user's response:
 - **Restart:** Run `python -c "from state import abandon_run; abandon_run(Path('STATE_DIR'))"` via Bash, then proceed to Stage 2.
 - **Abandon:** Run the same abandon command and stop.
 
-If `state.load_run()` returned None and the user just ran /research (no other reason for that), it may be that an old-schema (v2) run was abandoned silently. Stage 0's config load already printed the migration message -- no further action needed.
+If `state.load_run()` returned None and the user just ran /researcher (no other reason for that), it may be that an old-schema (v2) run was abandoned silently. Stage 0's config load already printed the migration message -- no further action needed.
 
 ---
 
@@ -287,7 +287,7 @@ Note: strategy persistence now happens once in Stage 2c (immediately after the r
 
 ### 2f. Load learned patterns (v3.1.0)
 
-**When to run:** Once per /research invocation, after Stage 2 has selected a strategy and Stage 3 has produced the resolved topics list. Every path through Stage 2 (planning_only via 2e, intent_planning via 2d->2e, unified via Stage 3) must run Stage 2f BEFORE entering Stage 4 -- Stage 4a/4e and Stage 6 rely on `LEARNED_BY_STAGE` being populated by 2f. If you got here from 2e's `yes` branch, run 2f next, then enter Stage 4. If you got here from Stage 3b, run 2f, then enter Stage 4.
+**When to run:** Once per /researcher invocation, after Stage 2 has selected a strategy and Stage 3 has produced the resolved topics list. Every path through Stage 2 (planning_only via 2e, intent_planning via 2d->2e, unified via Stage 3) must run Stage 2f BEFORE entering Stage 4 -- Stage 4a/4e and Stage 6 rely on `LEARNED_BY_STAGE` being populated by 2f. If you got here from 2e's `yes` branch, run 2f next, then enter Stage 4. If you got here from Stage 3b, run 2f, then enter Stage 4.
 
 Run via Bash:
 
@@ -1267,7 +1267,7 @@ Wait for user response:
 - **all:** Save all threads as the next batch input.
 - **specific numbers:** Save only the selected threads.
 
-If threads are approved, save them to `STATE_DIR/approved_threads.json` for a follow-up `/research` invocation. Do NOT start a new pipeline run within this run.
+If threads are approved, save them to `STATE_DIR/approved_threads.json` for a follow-up `/researcher` invocation. Do NOT start a new pipeline run within this run.
 
 ---
 
@@ -1332,7 +1332,7 @@ Estimated cost: ${estimated_cost:.2f}
 {if threads approved:}
 Threads queued for follow-up:
   - {topic} (priority: {priority})
-  Run /research again to execute these.
+  Run /researcher again to execute these.
 {end}
 
 Tier: {TIER} | Sources fetched: {total} | Notes written: {count} | Replans: {replan_count}
@@ -1446,7 +1446,7 @@ WARNING: v3.1.0 pattern learning state was not updated this run:
 To reset the affected store, delete the file manually:
   {VAULT}/.research-workflow/accumulator.json
   {VAULT}/.research-workflow/learned_patterns.md
-The next /research run will start with an empty store and rebuild from
+The next /researcher run will start with an empty store and rebuild from
 new cases going forward. Existing case history at
 {VAULT}/.research-workflow/cases/ is unaffected.
 ```
@@ -1495,7 +1495,7 @@ Promote / Reject / Hold?
 
 Use the user's response:
 
-All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10d uses -- without it, concurrent `/research` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
+All three branches below acquire `acquire_state_lock` around the shared-state writes. This is the same lock Stage 10d uses -- without it, concurrent `/researcher` runs (background + foreground) could race on `accumulator.json` and `learned_patterns.md` and lose updates. `STATE_ROOT_FOR_VAULT` is `{VAULT}/.research-workflow/`.
 
 **Precondition for all three branches:** Stage 10d already verified that BOTH `learned_patterns.md` AND `accumulator.json` are parseable (no `learned_patterns_*` and no `accumulator_*` warnings) BEFORE letting control reach Stage 10e. If any such warning was present, Stage 10d skipped 10e entirely. So inside each branch we can assume the loaders return a usable file -- but every branch still defends against late corruption by checking warnings before saving (`BRANCH_ABORTED` on mismatch). The Reject and Hold branches would otherwise silently overwrite a recoverable corrupt accumulator with empty content.
 

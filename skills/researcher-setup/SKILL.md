@@ -1,5 +1,5 @@
 ---
-name: research-setup
+name: researcher-setup
 description: 'Setup wizard for the research pipeline. Detects infrastructure, configures vault, installs optional tools. Run once per vault, re-run to update.'
 ---
 
@@ -677,8 +677,8 @@ Config saved to: {vault_root}/.research-workflow/config.json
 Vault rules saved to: {scripts_dir}/scripts/prompts/vault_rules.txt
 
 Next steps:
-  - Run /research "your topic" to start researching
-  - Run /research path/to/note.md to research an existing note
+  - Run /researcher "your topic" to start researching
+  - Run /researcher path/to/note.md to research an existing note
 ```
 
 If any issues were encountered (failed installs, missing tools), list them under a "Warnings" section.
