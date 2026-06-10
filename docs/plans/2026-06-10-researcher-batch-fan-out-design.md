@@ -24,6 +24,8 @@ Today the resolver has no hard topic cap, but big batches are throttled by the s
 
 The entire design rests on `agent(…, {agentType: '<plugin>:<agent>'})` resolving **registered plugin agents** (researcher's + librarian's) from inside a Workflow. This is **unvalidated** — Dossier inlined everything precisely to avoid depending on registration. **Task 0 is a cheap agentType-resolution spike** (dispatch one researcher agent + one librarian agent by `agentType`, plus a bad-name control). If it does not resolve, the design must change (different delegation mechanism) **before** any build. This is the session's core lesson applied up front: verify the Workflow API by launching, don't assume it.
 
+**RESULT (2026-06-10, spike `wsfkpbnha`): PASSED.** `research-workflow:search-agent` and `librarian:classify-agent` both resolve by `agentType` from inside a workflow (each self-identified as the correct agent, not a fallback). An unknown `agentType` **throws loudly** (no silent fallback); the error lists the full registry. **Refinement found:** the registry exposes `librarian:classify-agent` and `librarian:wikilink-scanner` as agent types, but Librarian's note-*writing* is the `librarian` **skill** (not a standalone agent) — so the write step is an agent instructed to *use the librarian skill*, while classify + wikilink are direct `agentType` dispatches.
+
 ## Architecture (Approach A — router branch)
 
 1. **`/researcher` skill — one router branch.** After plan-approval, the skill checks topic count vs `THRESHOLD` (default **10**, in vault config). `≤ THRESHOLD` → today's inline Stage 4–10 path, **unchanged**. `> THRESHOLD` → invoke the batch workflow. Small runs never touch new code.
@@ -32,7 +34,7 @@ The entire design rests on `agent(…, {agentType: '<plugin>:<agent>'})` resolvi
 
 3. **Agents (all `agentType`, nothing inlined), across two plugins:**
    - *researcher:* `search-agent`, `hop-planner`, `thread-discoverer` (existing) + **one new thin `fetch-summarize-runner`** agent. The workflow body can't run Bash/Python, but the real fetch/summarize logic *is* Python (`fetch_and_clean.py` cache/SSRF/Wayback; `summarize.py` Ollama). The runner wraps those scripts via Bash — **Python infra preserved, dispatched from inside an agent.** It needs the full Python path + `scripts_dir` (from config — the recurring on-PATH friction).
-   - *librarian:* `classify-agent`, the writer, `wikilink-scanner` — the canonical write span, via the existing Stage-7.0 neutral-contract handoff, always-on for the batch path. **Hard runtime precondition:** Librarian must be installed; the skill checks availability before taking the batch path and falls back/warns if absent.
+   - *librarian:* `classify-agent` + `wikilink-scanner` via `agentType`; the note-**write** itself is the `librarian` **skill** (not an agent type — confirmed by the Task-0 spike), dispatched as an agent instructed to use the librarian skill. Canonical write span via the existing Stage-7.0 neutral-contract handoff, always-on for the batch path. **Hard runtime precondition:** Librarian must be installed; the skill checks availability before taking the batch path and falls back/warns if absent.
 
 4. **Reused from Dossier:** `confidence.js` (test-synced with `confidence.py`), the agent-return JSON schemas, the contract-lint + launch-smoke discipline. **Not** Dossier's prompts — researcher's own agents are canonical. Dossier repo stays as the spike/reference.
 
