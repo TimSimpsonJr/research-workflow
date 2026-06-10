@@ -87,6 +87,12 @@ For each detected topic string:
    - "Look into Flock Safety and also their competitor Motorola Solutions" --> 2 topics
    - "What is the current status of SC bill H.3456?" --> 1 topic
 
+   **Do not cap the number of topics.** Resolve every distinct topic the prompt
+   describes -- a 50-topic prompt yields 50 topics. There is no implicit ceiling
+   and no "too many to handle" trimming; large batches are handled downstream
+   (the skill routes batches over `batch_threshold` to a parallel, auto-queued
+   workflow). Emitting fewer topics than the prompt asks for silently drops work.
+
 2. **Assign depth profile.** Each topic gets one of `quick`, `standard`, `deep`, `exhaustive`.
    Signals to detect from the prompt:
    - Words like "deeply", "thoroughly", "comprehensive" -> `deep` or `exhaustive`
@@ -182,7 +188,7 @@ Your entire response is a single JSON object. Rules:
 - When `strategy` is `intent_planning`, do NOT resolve topics yet -- return `topics: []` and let the orchestrator collect answers
 - `mode` is one of: `web_research`, `local_extraction`, `thread_pull`
 - `depth` (per topic) replaces the older `priority` field; valid values are `quick`, `standard`, `deep`, `exhaustive` (see Step 2)
-- `execution_order` is one of: `tier_1_first` (deep topics first, then standard, then quick), `parallel` (all at once for small batches), `sequential` (one at a time for very large batches)
+- `execution_order` is one of: `tier_1_first` (deep topics first, then standard, then quick), `parallel` (all at once for small batches), `sequential` (one at a time for very large batches). **Advisory only:** it is a hint about ordering preference, not a throttle. The skill decides routing by topic count vs `batch_threshold` (a large batch always runs as a parallel, auto-queued workflow regardless of this value); do NOT set `sequential` as a way to limit or slow a large batch.
 - `existing_urls` prevents duplicate fetching of URLs already in vault notes
 - `thread_pulls` only populated when vault note references were detected
 - `local_sources` only populated when file paths were detected

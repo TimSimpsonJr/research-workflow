@@ -416,6 +416,49 @@ Run Stage 2f before entering Stage 4.
 
 ---
 
+## Stage 3.5: Batch Routing Decision
+
+Run this AFTER Stage 2f and BEFORE entering Stage 4. It chooses one of two
+execution paths for this run:
+
+- **Inline path (default):** Stages 4–10 below, exactly as always. This is the
+  route for single topics and normal-sized batches, and is **unchanged**.
+- **Batch fan-out path:** **Stage 4B** (a Workflow-tool orchestration that fans
+  the per-topic hop loop out in parallel and auto-queues large batches). This is
+  an accelerator for *large web-research batches only*.
+
+From the approved plan and the Stage 0 config, compute:
+- `N` = number of entries in `PLAN_JSON['topics']`.
+- `batch_threshold` = `config['batch_threshold']` (default `10` if the key is absent).
+- `all_web_research` = every topic's `mode` is `web_research` (i.e. no
+  `local_extraction` or `thread_pull` topics anywhere in the batch).
+
+**Take the BATCH FAN-OUT path (Stage 4B) only if ALL THREE hold:**
+
+1. `N > batch_threshold` — more topics than the vault's threshold, AND
+2. `all_web_research` is true — the batch is purely web-research topics, AND
+3. the `librarian` plugin is available in this session (its `librarian` skill is
+   installed and invokable). The batch write span delegates note-writing to
+   Librarian and has **no inline fallback inside the workflow**, so Librarian is
+   a hard precondition — the same availability notion as Stage 7.0's gate.
+
+If all three hold → **go to Stage 4B (Batch Fan-Out); skip Stages 4–10.**
+
+**Otherwise → continue to Stage 4 below (the inline path).** When the batch was
+*over* threshold but a condition failed, tell the user one line so the choice is
+transparent:
+
+- **Mixed modes** (over threshold, but some topics are `local_extraction` /
+  `thread_pull`):
+  > Batch has non-web topics; running the interactive pipeline instead of batch fan-out.
+- **Librarian absent** (over threshold, all `web_research`, but `librarian` not
+  installed/invokable):
+  > The librarian plugin isn't available; running the interactive pipeline. Install `librarian` (Fieldwork marketplace) to enable large-batch fan-out.
+
+When `N <= batch_threshold`, the inline path is the expected route — no note needed.
+
+---
+
 ## Stage 4: Hop Loop
 
 For each hop level from 1 to the maximum `max_hops` across all topics, run the search->fetch->media->summarize->hop-planner sequence for all topics that are still active at this level.
@@ -1614,6 +1657,90 @@ with acquire_state_lock(Path('STATE_ROOT_FOR_VAULT')):
 ```
 
 If the user aborts (Ctrl+C, dismisses, walks away), do nothing. The `promotion_pending` flag remains set on the accumulator entry, and next-run Stage 10e will re-prompt.
+
+---
+
+## Stage 4B: Batch Fan-Out (large web_research batches)
+
+> Reached **only** from Stage 3.5 when the batch routing conditions hold (N > `batch_threshold`, every topic `web_research`, `librarian` available). This **replaces Stages 4–10** for the run: the per-topic hop loop + write span execute inside the `research-batch` Workflow. This stage owns the cost-estimate approval, the dispatch, and the thread-selection gate. Do not run Stages 4–10 on this path.
+
+### 4B.1 Up-front cost estimate + approval
+
+Render an honest estimate from the approved plan. Per-topic agent cost scales with depth (search + fetch-summarize per hop, plus a hop-planner per `continue`):
+
+| depth | max hops | ~agents/topic |
+|-------|----------|---------------|
+| quick | 1 | ~2 |
+| standard | 3 | ~5–7 |
+| deep | 4 | ~7–10 |
+| exhaustive | 5 | ~9–12 |
+
+Compute:
+- `est_agents` = Σ per-depth estimate over topics, + 2 (Librarian classify + write) + 1 (thread-discoverer).
+- `est_tokens` ≈ `est_agents × ~50K` (rough per-agent average — the comparable Dossier capstone averaged ~52K/agent).
+- `est_minutes` ≈ scaled by `est_agents` and the concurrency cap (~12 parallel).
+- `est_cost` from the resolver's `estimated_usage` when present, else from `est_tokens`.
+
+Present and gate (this is the up-front approval; the batch then runs unattended):
+```
+Large batch: {N} topics ({depth breakdown}). Routing to the parallel batch fan-out.
+Estimated: ~{est_agents} agents · ~{est_tokens/1000}K tokens · ~{est_minutes} min · ~${est_cost}
+Runs unattended — no mid-run gates; low-confidence topics auto-replan up to 2x then are flagged (not gated).
+
+Proceed? [yes / no / switch to inline]
+```
+- **yes** → 4B.2.
+- **no** → stop.
+- **switch to inline** → fall back to Stage 4 (the inline path) for this batch.
+
+### 4B.2 Dispatch the workflow
+
+Determine the full Python path (the batch's `fetch-summarize-runner` needs it — nothing is on PATH):
+```bash
+python -c "import sys; print(sys.executable)"
+```
+Create the scratch dir `STATE_DIR/batch_scratch` (the runner writes intermediates under unique per-topic-hop subdirs). Build a compact `vaultDigest` of `{title, tags, path}` from the vault index (cap ~1500 most-recent) for novelty resolution.
+
+Record a lightweight **approve** run marker in `STATE_DIR`. Then call the **Workflow tool** (the skill instruction is your opt-in to use it):
+```
+Workflow({
+  name: 'research-batch',
+  args: {
+    plan: <approved resolver plan: project + topics[{topic, mode, depth}]>,
+    config: {
+      vault_root: VAULT, scripts_dir: SCRIPTS, python_path: <sys.executable>,
+      ollama_model: RECOMMENDED_MODEL,   // null at base tier
+      tier: TIER, work_dir: "STATE_DIR/batch_scratch",
+      outputMode: "vault", vaultDigest: <digest>
+    },
+    runId: RUN_ID
+  }
+})
+```
+The workflow's agents draw from the turn's **shared budget pool**, so a `+Nk`/budget directive caps the whole batch. It runs in the background; you are notified on completion.
+
+### 4B.3 Thread-selection gate
+
+The result is `{written_notes, updated_notes, threads, summary}`. If `summary.aborted` / `aborted:true`, report `reason` and stop. Otherwise:
+```
+Batch complete: {notes_written} written, {notes_updated} updated{, {N} low-confidence flagged}.
+Follow-up threads:
+  1. {topic} (score {score}, {novelty_status}) — {rationale}
+  ...
+Run a follow-up batch on selected threads? [numbers / all / none]
+```
+- **numbers / all** → build a fresh plan from the selected threads (`mode: web_research`; `suggested_priority` → `depth`) and **re-dispatch from 4B.1** (a new cost estimate + approval each round — the don't-compound backstop against runaway escalation).
+- **none** → 4B.4.
+
+### 4B.4 Completion summary
+
+Record the **complete** run marker. Present:
+```
+{project}: {notes_written} written, {notes_updated} updated, {threads_found} threads.
+{low-confidence topics flagged, if any} · {failures, if any}
+Notes are in the vault.
+```
+Done. (Stages 4–10 are the inline alternative and are not run on this path.)
 
 ---
 

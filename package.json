@@ -1,0 +1,10 @@
+{
+  "name": "researcher-workflow",
+  "version": "3.2.0",
+  "type": "module",
+  "private": true,
+  "description": "Node test harness for the researcher batch fan-out workflow (lib/ helpers + .claude/workflows contract). The plugin itself is Python + Markdown; this exists only so `node --test` can exercise confidence.js, schemas.js, and the workflow launch contract.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

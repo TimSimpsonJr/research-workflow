@@ -55,6 +55,14 @@ def test_default_config_has_required_fields():
         assert field in cfg, f"Missing required field: {field}"
 
 
+def test_default_config_batch_threshold_default():
+    """batch_threshold defaults to 10 — the topic count above which a
+    web_research batch routes to the research-batch workflow."""
+    from config_manager import default_config
+    cfg = default_config("/fake/vault")
+    assert cfg["batch_threshold"] == 10
+
+
 def test_get_state_dir_creates_if_missing(tmp_path):
     from config_manager import get_state_dir
     state_dir = get_state_dir(tmp_path)

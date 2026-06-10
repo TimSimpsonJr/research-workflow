@@ -1,156 +1,100 @@
-# Research Workflow
+# Researcher
 
-A Claude Code plugin for deep research into Obsidian vaults. Takes a topic (or a batch), plans the work, searches the web in confidence-gated multi-hop rounds, fetches and summarizes sources with credibility tiering, classifies them against your vault structure, and writes fully-formed notes with frontmatter, tags, wikilinks, and citations.
+Researcher is a Claude Code plugin that does real web research for you and files the results away as finished notes. Hand it one topic or a list of fifty, and a few minutes later your Obsidian vault has a handful of new notes waiting. Each one is searched, weighed for source quality, and cross-linked, then written to match how you already organize things: frontmatter, tags, `[[wikilinks]]`, and a sources section at the bottom.
 
-Zero paid API calls. All AI work runs through Claude Code subagents (Haiku for parallel tasks, Sonnet for orchestration and between-hop reasoning, Opus for synthesis) or a local Ollama instance.
+It runs on Claude Code's own subagents (or a local model on your machine), so there's no separate API key to wire up and no per-search bill to watch.
 
-## Quick Start
+## What you can do with it
 
-Install from the Fieldwork marketplace:
+- **Ask about anything.** `/researcher "the history of license plate readers in South Carolina"` and it comes back with a small, linked set of notes instead of 14 open browser tabs.
+- **Hand it a whole list.** Point it at a file of topics and it works through all of them, not just the first few.
+- **Run big batches in parallel.** Got 30 or 50 topics? Researcher fans them out and researches them at the same time instead of one after another, then writes them all into your vault. (This is the newest piece, built for people doing real volume.)
+- **Let it find the next thread.** After a batch, it reads back over what it just wrote, spots the loose ends worth chasing, and offers to research those too.
+- **Keep everything in one place.** New notes link to the notes you already have and live in your vault, not in a separate app.
+
+## What makes it useful
+
+It checks its sources. Every source gets a credibility rating, and a peer-reviewed paper or an official dataset counts for more than a random blog. The research keeps going until it has enough solid material or hits a sensible stopping point, so you're not reading notes built on one shaky link.
+
+For anything ambiguous or big, it shows you the plan first: what it's about to do, and roughly what it'll cost in time and tokens. Then you say go.
+
+It costs nothing on top of what you already pay for Claude. The work happens through Claude Code, with an optional local model (Ollama) doing the summarizing if you have one.
+
+## Quick start
+
+Install it from the Fieldwork marketplace:
 
 ```
 /plugin marketplace add TimSimpsonJr/fieldwork-plugins
 /plugin install researcher@fieldwork-plugins
 ```
 
-Configure your vault:
+Point it at your vault once:
 
 ```
 /researcher-setup
 ```
 
-Start researching:
+Then research anything:
 
 ```
 /researcher "any topic"
 ```
 
-## Three Modes
+The setup wizard walks you through it step by step and never changes anything without asking first.
 
-- **Single topic** — `/researcher "quantum computing"` researches one topic end-to-end
-- **Batch** — `/researcher batch topics.md` processes a list of topics from a file
-- **Thread-pull** — after a batch run, discovers follow-up leads from what you wrote and researches them automatically
+## The three ways to run it
 
-## Planning Strategies
+- **One topic.** `/researcher "quantum computing"` researches a single topic start to finish.
+- **A batch.** `/researcher batch topics.md` works through a list of topics from a file. Past about 10 topics, it automatically switches to the parallel batch engine.
+- **Thread-pull.** After a batch, it suggests follow-up topics it found in your new notes, and you pick which ones to chase.
 
-The resolver picks a strategy automatically based on the prompt:
+---
 
-- **planning_only** — clear, narrow queries skip the approval gate and dispatch straight to research
-- **intent_planning** — ambiguous prompts trigger a short clarifying Q&A before planning
-- **unified** — batch prompts and broad topics present the full plan for review
+## Under the hood
 
-## Depth Profiles
+The mechanics behind a run.
 
-Each topic gets a depth assigned by the resolver:
+### Depth
 
-| Depth        | Max hops | Confidence target | Typical use                                     |
-|--------------|----------|-------------------|-------------------------------------------------|
-| `quick`      | 1        | 0.65              | one-shot lookup, small clarifying questions     |
-| `standard`   | 2        | 0.75              | most everyday topics                            |
-| `deep`       | 3        | 0.85              | technical / policy topics needing primaries     |
-| `exhaustive` | 4        | 0.90              | research-paper-grade work                       |
+The planner assigns each topic a depth, which sets how hard it digs before it stops:
 
-## Multi-Hop Pipeline
+| Depth        | Hop limit | Confidence target | Typical use                                 |
+|--------------|-----------|-------------------|---------------------------------------------|
+| `quick`      | 1         | 0.6               | a fast lookup or a small clarifying question |
+| `standard`   | 3         | 0.7               | most everyday topics                         |
+| `deep`       | 4         | 0.8               | technical or policy work that needs primaries |
+| `exhaustive` | 5         | 0.9               | research-paper-grade coverage                |
 
-Each topic runs a loop:
+### The research loop
 
-1. **Search** for sources (SearXNG + Claude WebSearch where available), scored by source tier
-2. **Fetch** (Jina Reader → Wayback → Playwright fallback) with SHA-256 cache and 7-day TTL
-3. **Media** capture — images, video thumbnails, audio — rewritten to Obsidian embeds
-4. **Summarize** (Ollama if available, Haiku subagent otherwise)
-5. **Hop-planner** (Sonnet) decides what happens next:
-   - `continue` with a chosen hop pattern (`entity_expansion`, `temporal_progression`, `conceptual_deepening`, or `causal_chain`)
-   - `stop` if confidence target is reached
-   - `replan` if contradictions spiked or coverage stalled
+Each topic runs a loop: search for sources (scored by credibility), fetch and clean the pages (with a cache so it never re-downloads the same thing), summarize them, then decide what to do next. The planner either keeps going down a chosen thread, stops because it has enough, or replans when the sources contradict each other or the coverage stalls. A quality check at the end can send a thin topic back around for another pass (up to twice) before it's flagged and moved on.
 
-The loop runs up to the topic's max-hop ceiling. A quality gate then compares per-topic confidence against its target and either accepts, re-admits with a bumped ceiling (auto-replan, up to twice), or escalates to the user.
+### Source ratings
 
-## Source Tiering and Confidence
+Every source gets a tier from T1 (peer-reviewed work, primary documents, official datasets) down to T4 (opinion columns, personal blogs, social posts), plus a separate flag for whether it's a primary source. Confidence for a topic blends four things: how varied the source tiers are, how well the topic is covered, whether primary sources showed up, and whether there are enough sources overall. A second signal watches for contradictions and can trigger a replan on its own.
 
-Every source gets a numeric credibility tier:
+### Where notes go
 
-- **T1 (1.0)** — peer-reviewed, primary documents, official datasets
-- **T2 (0.75)** — major news outlets, academic preprints, authoritative reporting
-- **T3 (0.5)** — analysis pieces, secondary aggregators
-- **T4 (0.3)** — opinion, blogs, social
+Researcher hands the write-up to its companion plugin, [Librarian](https://github.com/TimSimpsonJr/librarian), which turns the research into proper vault notes: classified into the right folders, tagged, wikilinked to what you already have, with map-of-content pages kept up to date. (Librarian installs automatically alongside Researcher.)
 
-Sources are also tagged with an orthogonal `is_primary` boolean and a `primary_type` enum (eyewitness / official-record / dataset / interview / etc.) so primary-source presence can be scored independently of tier.
+### What it needs
 
-Confidence at the end of each hop is:
+Researcher runs on three tiers, and figures out which one you're on automatically:
 
-```
-0.4 * tier_diversity + 0.3 * topic_coverage + 0.2 * primary_presence + 0.1 * source_count_adequacy
-```
+| Tier     | You have                                            | You get                                                              |
+|----------|-----------------------------------------------------|---------------------------------------------------------------------|
+| **Base** | Claude Code (that's it)                             | The full pipeline, all through subagents                            |
+| **Mid**  | Base, plus [Ollama](https://ollama.com)             | Summarizing happens on your machine                                 |
+| **Full** | Mid, plus SearXNG, Playwright, yt-dlp, Whisper      | Private search, JavaScript-heavy pages, YouTube and audio transcription |
 
-A second signal — `contradiction_rate` — runs in parallel and can independently trigger a replan if it spikes.
+`/researcher-setup` checks what you have and can start the optional pieces for you.
 
-## Pipeline Stages
+### Project layout
 
-| Stage | What                                                                          |
-|-------|-------------------------------------------------------------------------------|
-| 0     | Load config, detect infrastructure tier, build / update vault index           |
-| 1     | Check for active or stale run                                                 |
-| 2     | Triage — strategy selection                                                   |
-| 3     | Resolve — topic plans with depth profiles                                     |
-| 4     | Hop loop — search / fetch / media / summarize / hop-planner per topic per hop |
-| 5     | Quality gate — confidence + contradiction checks; auto-replan or escalate     |
-| 6     | Classify — map summaries to vault folders, tags, wikilinks                    |
-| 7     | Write notes — final notes with frontmatter, citations, embedded media         |
-| 8     | Wikilink scan — backfill links into existing notes                            |
-| 9     | Discover threads — score batch results for follow-up                          |
-| 10    | Complete — archive run, write case record for pattern learning                |
+See [MANIFEST.md](MANIFEST.md) for the full file tree and how the pieces fit together.
 
-State is checkpointed after every stage. If the pipeline crashes, it resumes from the last completed stage.
-
-## Infrastructure Tiers
-
-| Tier     | Requires                                                  | Adds                                                                                  |
-|----------|-----------------------------------------------------------|---------------------------------------------------------------------------------------|
-| **Base** | Claude Code only                                          | Full pipeline via subagents (search, summarize, classify all via Haiku)               |
-| **Mid**  | + Ollama                                                  | Local summarization (no API spend on summary work)                                    |
-| **Full** | + SearXNG (Docker) + Playwright + yt-dlp + Whisper        | Private search merging, JS-page rendering, YouTube extraction, audio transcription    |
-
-`/researcher-setup` auto-detects your tier and can auto-start the SearXNG container.
-
-## Cases — Foundation for Pattern Learning
-
-Each completed run writes a JSON case record to `{vault}/.researcher/cases/{run_id}.json` capturing the query, domain tags, strategy used, depth profile, hops executed, confidence achieved, contradiction rate, and which hop patterns worked vs. failed. v3.0.0 writes these records but does not yet read them. v3.1.0 will add the read path — the resolver will surface relevant prior cases at triage so downstream agents bias toward query formulations and hop patterns that have worked for similar topics before.
-
-## Project Structure
-
-```
-.claude-plugin/
-  plugin.json                 Claude Code plugin manifest
-  marketplace.json            Single-plugin marketplace pointer (./ source)
-
-skills/
-  researcher/SKILL.md         Sonnet orchestrator — 11-stage multi-hop pipeline
-  researcher-setup/SKILL.md   Interactive setup wizard
-
-agents/
-  topic-resolver.md           Sonnet — NL prompt → research plan, strategy + depth
-  hop-planner.md              Sonnet — between-hop confidence math + next-hop decision
-  search-agent.md             Haiku — per-topic web search + T1-T4 source scoring
-  classify-agent.md           Haiku — summary → folder + tags + wikilinks
-  thread-discoverer.md        Haiku — batch-result lead scoring for follow-up research
-  wikilink-scanner.md         Haiku — wikilink backfill into existing notes
-
-scripts/
-  config_manager.py           JSON vault config (.researcher/config.json)
-  state.py                    v3 checkpoint schema, atomic transitions, case writer
-  detect_tier.py              base/mid/full tier detection + SearXNG auto-start
-  vault_index.py              SQLite FTS5 vault search index
-  fetch_and_clean.py          Jina → Wayback → Playwright fetch + SHA-256 cache
-  fetch_playwright.py         JS-page fallback (full tier only)
-  fetch_media.py              Media download + Obsidian embed rewriting
-  summarize.py                Map-reduce summarization (Ollama)
-  confidence.py               Depth profiles + confidence/contradiction formulas
-  ...
-```
-
-See [MANIFEST.md](MANIFEST.md) for the complete file tree and key relationships.
-
-## Development
+## For developers
 
 ```bash
 pip install -r requirements.txt
@@ -158,21 +102,11 @@ pip install pytest pytest-mock
 pytest tests/ -v
 ```
 
-All 308 tests run offline. No API keys required.
+The Python suite is 389 tests, all offline, no API key needed. The batch workflow's JavaScript helpers have their own `node --test` suite (run `node --test` from the repo root).
 
-### Requirements
+**Requirements:** Python 3.10+, [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and an [Obsidian](https://obsidian.md/) vault.
 
-- Python 3.10+
-- [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-- [Obsidian](https://obsidian.md/) vault
-
-### Optional (full tier)
-
-- Docker — for SearXNG search
-- Ollama — for local summarization
-- Playwright — `pip install playwright && playwright install chromium`
-- `yt-dlp` — for YouTube extraction
-- `openai-whisper` — for audio transcription
+**Optional (full tier):** Docker (for SearXNG), Ollama, Playwright, `yt-dlp`, `openai-whisper`.
 
 ## License
 
