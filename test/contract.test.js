@@ -23,6 +23,10 @@ const stripExports = (s) =>
 
 const lines = (src) => src.split(/\r?\n/).map((line, i) => ({ line, n: i + 1 }));
 
+// Normalize CRLF -> LF so the inline-sync marker regex (matches `>>>\n`) and the
+// block comparison work regardless of git's working-copy line endings.
+const norm = (s) => s.replace(/\r\n/g, '\n');
+
 test('workflow file exists', () => {
   assert.ok(existsSync(WF), `expected workflow at ${WF}`);
 });
@@ -78,21 +82,21 @@ test('Guard 5: meta is a pure literal (no concat / template / interpolation)', (
 });
 
 test('inline-sync: workflow confidence block matches lib/confidence.js', () => {
-  const src = readFileSync(WF, 'utf8');
+  const src = norm(readFileSync(WF, 'utf8'));
   const m = src.match(
     /\/\/ >>> BEGIN inlined lib\/confidence\.js[^\n]*>>>\n([\s\S]*?)\n\/\/ <<< END inlined lib\/confidence\.js <<</,
   );
   assert.ok(m, 'confidence inline markers not found');
-  const expected = stripExports(readFileSync(join(ROOT, 'lib', 'confidence.js'), 'utf8'));
+  const expected = norm(stripExports(readFileSync(join(ROOT, 'lib', 'confidence.js'), 'utf8')));
   assert.equal(m[1].trim(), expected.trim(), 'inlined confidence drifted from lib/confidence.js — run `node tools/reinline-workflow.mjs`');
 });
 
 test('inline-sync: workflow schemas block matches lib/schemas.js', () => {
-  const src = readFileSync(WF, 'utf8');
+  const src = norm(readFileSync(WF, 'utf8'));
   const m = src.match(
     /\/\/ >>> BEGIN inlined lib\/schemas\.js[^\n]*>>>\n([\s\S]*?)\n\/\/ <<< END inlined lib\/schemas\.js <<</,
   );
   assert.ok(m, 'schemas inline markers not found');
-  const expected = stripExports(readFileSync(join(ROOT, 'lib', 'schemas.js'), 'utf8'));
+  const expected = norm(stripExports(readFileSync(join(ROOT, 'lib', 'schemas.js'), 'utf8')));
   assert.equal(m[1].trim(), expected.trim(), 'inlined schemas drifted from lib/schemas.js — run `node tools/reinline-workflow.mjs`');
 });

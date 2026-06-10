@@ -241,6 +241,31 @@ const MOC_RESULT = {
   },
 };
 
+// Librarian skill-writer return — the notes actually written + MOC/back-link
+// updates. WITHOUT this schema agent() returns the writer's free text (prose +
+// JSON), and `.written_notes` read off a string is undefined, so the workflow
+// under-reports as 0 even when notes were written. The schema forces a parsed
+// object. (Found by the first real e2e, run wf_2266c970-a27.)
+const WRITE_RESULT = {
+  type: 'object',
+  required: ['written_notes'],
+  properties: {
+    written_notes: {
+      type: 'array',
+      items: {
+        type: 'object',
+        required: ['path', 'title', 'action'],
+        properties: {
+          path: { type: 'string' },
+          title: { type: 'string' },
+          action: { type: 'string' },
+        },
+      },
+    },
+    updated_notes: { type: 'array', items: { type: 'string' } },
+  },
+};
+
 // researcher:thread-discoverer — follow-up lead scoring for the thread gate.
 const THREADS = {
   type: 'object',
@@ -403,6 +428,7 @@ function writerAgent(notes, vaultContext, contradictions, config, lowConfidence)
   return callAgent(
     'Use the librarian skill to write these findings notes to the vault. For each entry in notes_to_create (the neutral input contract), author and write the note, add [[wikilinks]], and update the relevant MOC/index note — serialize MOC writes, never write the same MOC file in parallel. Then return ONLY a JSON object: {"written_notes":[{"path":"...","title":"...","action":"create|update"}],"updated_notes":["path", ...]}.',
     {
+      schema: WRITE_RESULT,
       label: 'librarian-write',
       phase: 'Write',
       input: {

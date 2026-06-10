@@ -9,6 +9,7 @@ const EXPECTED = {
   CLASSIFY: ['notes_to_create'],
   WIKILINK_RESULT: ['edits', 'stats'],
   MOC_RESULT: ['updated'],
+  WRITE_RESULT: ['written_notes'],
   THREADS: ['threads', 'batch_stats'],
 };
 
