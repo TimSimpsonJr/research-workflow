@@ -82,7 +82,7 @@ Every source gets a tier from T1 (peer-reviewed work, primary documents, officia
 
 ### Where notes go
 
-Researcher hands the write-up to its companion plugin, [Librarian](https://github.com/TimSimpsonJr/librarian), which turns the research into proper vault notes: classified into the right folders, tagged, wikilinked to what you already have, with map-of-content pages kept up to date. (Librarian installs automatically alongside Researcher.)
+Researcher hands the write-up to its companion plugin, [Librarian](https://github.com/TimSimpsonJr/librarian), which turns the research into proper vault notes: classified into the right folders, tagged, wikilinked to what you already have, with map-of-content pages kept up to date. (Librarian is required by Researcher; install it from the same Fieldwork marketplace.)
 
 ### What it needs
 
@@ -123,7 +123,7 @@ The Python suite is 389 tests, all offline, no API key needed. The batch workflo
 ## Part of the Fieldwork suite
 - [Researcher](https://github.com/TimSimpsonJr/researcher): gather sources into cited notes
 - [Magpie](https://github.com/TimSimpsonJr/magpie): analyze FOIA/data into findings
-- [Librarian](https://github.com/TimSimpsonJr/librarian): file findings as linked notes (shared layer)
+- [Librarian](https://github.com/TimSimpsonJr/librarian): organize findings into linked vault notes (shared layer)
 - [Copydesk](https://github.com/TimSimpsonJr/copydesk): write findings up in your voice
 
 ## License
