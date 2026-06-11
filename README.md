@@ -1,8 +1,29 @@
 # Researcher
 
+![License](https://img.shields.io/badge/license-MIT-blue) ![Version](https://img.shields.io/badge/version-3.2.1-informational) ![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-8A3FFC) ![Python](https://img.shields.io/badge/python-3.12-3776AB) ![Status](https://img.shields.io/badge/status-beta-orange)
+
 Researcher is a Claude Code plugin that does real web research for you and files the results away as finished notes. Hand it one topic or a list of fifty, and a few minutes later your Obsidian vault has a handful of new notes waiting. Each one is searched, weighed for source quality, and cross-linked, then written to match how you already organize things: frontmatter, tags, `[[wikilinks]]`, and a sources section at the bottom.
 
 It runs on Claude Code's own subagents (or a local model on your machine), so there's no separate API key to wire up and no per-search bill to watch.
+
+## How it works
+
+```mermaid
+flowchart TD
+    A[Your topic or list of topics] --> B[Resolver plans depth and mode]
+    B --> C{Hop loop, per topic}
+    C --> D[Search and tier sources T1-T4]
+    D --> E[Fetch and clean pages, cached]
+    E --> F[Summarize, on-device or Haiku]
+    F --> G[Hop-planner scores confidence]
+    G -->|keep going| C
+    G -->|contradictions or stall| C
+    G -->|enough, or budget spent| H[Quality gate]
+    H -->|thin topic| C
+    H -->|passes| I[Librarian files cited notes into your vault]
+    I --> J[Wikilink scan links to your existing notes]
+    J --> K[Thread-discoverer suggests follow-ups]
+```
 
 ## What you can do with it
 
@@ -26,7 +47,7 @@ Install it from the Fieldwork marketplace:
 
 ```
 /plugin marketplace add TimSimpsonJr/fieldwork-plugins
-/plugin install researcher@fieldwork-plugins
+/plugin install researcher@fieldwork
 ```
 
 Point it at your vault once:
@@ -94,6 +115,12 @@ Researcher runs on three tiers, and figures out which one you're on automaticall
 
 See [MANIFEST.md](MANIFEST.md) for the full file tree and how the pieces fit together.
 
+> [!NOTE]
+> **What you need:** Python 3.12, [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and an [Obsidian](https://obsidian.md/) vault. That's the whole base tier. Claude installs the optional Python pieces for you. The heavier extras (mise/Node, Docker for SearXNG) are only for the full tier and for contributors.
+
+> [!IMPORTANT]
+> **Your data & privacy:** Your finished notes and your vault stay on your machine, and there's no separate Researcher service collecting anything. On the base tier, the web research runs through Claude Code's own search and page-fetching, so your queries and the source URLs are handled the same way as any Claude Code web task. Fetched pages are cached locally so the same URL is never pulled twice. On the mid and full tiers, more of the work moves on-device: summarizing runs locally through Ollama, and search can route through your own private SearXNG instance, so even the queries stay on your network. There's no built-in PII redaction here; for redaction and chain-of-custody on sensitive documents, that's [Magpie](https://github.com/TimSimpsonJr/magpie)'s job in the same suite.
+
 ## For developers
 
 ```bash
@@ -104,9 +131,15 @@ pytest tests/ -v
 
 The Python suite is 389 tests, all offline, no API key needed. The batch workflow's JavaScript helpers have their own `node --test` suite (run `node --test` from the repo root).
 
-**Requirements:** Python 3.10+, [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and an [Obsidian](https://obsidian.md/) vault.
+**Requirements:** Python 3.12, [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and an [Obsidian](https://obsidian.md/) vault.
 
 **Optional (full tier):** Docker (for SearXNG), Ollama, Playwright, `yt-dlp`, `openai-whisper`.
+
+## Part of the Fieldwork suite
+- [Researcher](https://github.com/TimSimpsonJr/researcher): gather sources into cited notes
+- [Magpie](https://github.com/TimSimpsonJr/magpie): analyze FOIA/data into findings
+- [Librarian](https://github.com/TimSimpsonJr/librarian): file findings as linked notes (shared layer)
+- [Copydesk](https://github.com/TimSimpsonJr/copydesk): write findings up in your voice
 
 ## License
 

@@ -1,7 +1,7 @@
 {
   "name": "researcher",
-  "description": "Researches any topic, or a whole batch of them, and writes well-organized, cited notes straight into your Obsidian vault. Runs on Claude Code, with no separate API keys to set up.",
-  "version": "3.2.0",
+  "description": "Researches any topic, or a whole batch of them, and writes well-organized, cited notes straight into your Obsidian vault. Runs on Claude Code, with no separate API keys to set up. Part of the Fieldwork investigative suite.",
+  "version": "3.2.1",
   "dependencies": ["librarian"],
   "author": {
     "name": "Tim Simpson"
