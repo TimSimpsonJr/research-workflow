@@ -8,22 +8,7 @@ It runs on Claude Code's own subagents (or a local model on your machine), so th
 
 ## How it works
 
-```mermaid
-flowchart TD
-    A["Your topic, or a list of topics"] --> B["Resolver plans depth and mode"]
-    B --> C{"Hop loop, per topic"}
-    C --> D["Search and tier sources (T1-T4)"]
-    D --> E["Fetch and clean pages (cached)"]
-    E --> F["Summarize (on-device or Haiku)"]
-    F --> G["Hop-planner scores confidence"]
-    G -->|keep going| C
-    G -->|contradictions or stall| C
-    G -->|enough or budget spent| H{"Quality gate"}
-    H -->|thin topic| C
-    H -->|passes| I["Librarian files cited notes into your vault"]
-    I --> J["Wikilink scan links your existing notes"]
-    J --> K["Thread-discoverer suggests follow-ups"]
-```
+**Your topic** → the resolver plans a depth and mode → a **hop loop** runs (search and tier sources → fetch and clean pages → summarize → score confidence), looping until it has enough or hits its budget → a **quality gate** sends thin topics back for another pass → **Librarian** files the cited notes into your vault, scans for wikilinks, and suggests follow-up threads.
 
 ## What you can do with it
 
