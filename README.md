@@ -2,7 +2,7 @@
 
 ![License](https://img.shields.io/badge/license-MIT-blue) ![Version](https://img.shields.io/badge/version-3.2.1-informational) ![Built for Claude Code](https://img.shields.io/badge/built%20for-Claude%20Code-8A3FFC) ![Python](https://img.shields.io/badge/python-3.12-3776AB) ![Status](https://img.shields.io/badge/status-stable-brightgreen)
 
-Researcher is a Claude Code plugin that does real web research for you and files the results away as finished notes. Hand it one topic or a list of fifty, and a few minutes later your Obsidian vault has a handful of new notes waiting. Each one is searched, weighed for source quality, and cross-linked, then written to match how you already organize things: frontmatter, tags, `[[wikilinks]]`, and a sources section at the bottom.
+Researcher is a Claude Code plugin that does real web research for you and files the results away as finished notes. Hand it one topic or a list of fifty, and a few minutes later your Obsidian vault has a handful of new notes waiting. Each note is researched and weighed for source quality, then cross-linked to what you already have. It lands in your vault formatted the way you already work, with `[[wikilinks]]` to your existing notes and a sources section at the bottom.
 
 It runs on Claude Code's own subagents (or a local model on your machine), so there's no separate API key to wire up and no per-search bill to watch.
 
@@ -20,7 +20,7 @@ It runs on Claude Code's own subagents (or a local model on your machine), so th
 
 ## What makes it useful
 
-It checks its sources. Every source gets a credibility rating, and a peer-reviewed paper or an official dataset counts for more than a random blog. The research keeps going until it has enough solid material or hits a sensible stopping point, so you're not reading notes built on one shaky link.
+It checks its sources: a peer-reviewed paper or an official dataset counts for more than a random blog, and the research keeps going until it has enough solid material or hits a sensible stopping point.
 
 For anything ambiguous or big, it shows you the plan first: what it's about to do, and roughly what it'll cost in time and tokens. Then you say go.
 
@@ -104,7 +104,7 @@ See [MANIFEST.md](MANIFEST.md) for the full file tree and how the pieces fit tog
 > **What you need:** Python 3.12, [Claude Code](https://docs.anthropic.com/en/docs/claude-code), and an [Obsidian](https://obsidian.md/) vault. That's the whole base tier. Claude installs the optional Python pieces for you. The heavier extras (mise/Node, Docker for SearXNG) are only for the full tier and for contributors.
 
 > [!IMPORTANT]
-> **Your data & privacy:** Your finished notes and your vault stay on your machine, and there's no separate Researcher service collecting anything. On the base tier, the web research runs through Claude Code's own search and page-fetching, so your queries and the source URLs are handled the same way as any Claude Code web task. Fetched pages are cached locally so the same URL is never pulled twice. On the mid and full tiers, more of the work moves on-device: summarizing runs locally through Ollama, and search can route through your own private SearXNG instance, so even the queries stay on your network. There's no built-in PII redaction here; for redaction and chain-of-custody on sensitive documents, that's [Magpie](https://github.com/TimSimpsonJr/magpie)'s job in the same suite.
+> **Your data & privacy:** Your finished notes and your vault stay on your machine; there is no separate Researcher service. On the base tier, the web research runs through Claude Code's own search and page-fetching, so your queries and the source URLs go through Claude Code's web access, under the same terms as any other Claude Code session. Fetched pages are cached locally so the same URL is never pulled twice. On the mid and full tiers, more of the work moves on-device: summarizing runs locally through Ollama, and search can route through your own private SearXNG instance, so even the queries stay on your network. PII redaction and chain-of-custody for sensitive documents are out of scope here; that is [Magpie](https://github.com/TimSimpsonJr/magpie)'s job in the suite.
 
 ## For developers
 
