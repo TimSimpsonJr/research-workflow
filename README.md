@@ -10,19 +10,19 @@ It runs on Claude Code's own subagents (or a local model on your machine), so th
 
 ```mermaid
 flowchart TD
-    A[Your topic or list of topics] --> B[Resolver plans depth and mode]
-    B --> C{Hop loop, per topic}
-    C --> D[Search and tier sources T1-T4]
-    D --> E[Fetch and clean pages, cached]
-    E --> F[Summarize, on-device or Haiku]
-    F --> G[Hop-planner scores confidence]
+    A["Your topic, or a list of topics"] --> B["Resolver plans depth and mode"]
+    B --> C{"Hop loop, per topic"}
+    C --> D["Search and tier sources (T1-T4)"]
+    D --> E["Fetch and clean pages (cached)"]
+    E --> F["Summarize (on-device or Haiku)"]
+    F --> G["Hop-planner scores confidence"]
     G -->|keep going| C
     G -->|contradictions or stall| C
-    G -->|enough, or budget spent| H[Quality gate]
+    G -->|enough or budget spent| H{"Quality gate"}
     H -->|thin topic| C
-    H -->|passes| I[Librarian files cited notes into your vault]
-    I --> J[Wikilink scan links to your existing notes]
-    J --> K[Thread-discoverer suggests follow-ups]
+    H -->|passes| I["Librarian files cited notes into your vault"]
+    I --> J["Wikilink scan links your existing notes"]
+    J --> K["Thread-discoverer suggests follow-ups"]
 ```
 
 ## What you can do with it
